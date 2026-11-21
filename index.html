@@ -1,0 +1,2398 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#06241b" />
+  <title>排七撲克牌｜跨裝置全螢幕與多人連線版</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PeerJS CDN (WebRTC P2P 純前端連線) -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- QRCode.js CDN (生成房間專屬 QR Code) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- Google Fonts: Noto Sans TC -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --felt-light: #0f513c;
+      --felt-mid: #0b3d2e;
+      --felt-dark: #06241b;
+      --gold: #f5c542;
+      --gold-dim: #b88a1e;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    /* PWA 全螢幕與視口鎖定：防止手機瀏覽器網址列伸縮裁切 */
+    html, body {
+      height: 100dvh;
+      width: 100vw;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: 'Noto Sans TC', system-ui, -apple-system, sans-serif;
+      color: #f8fafc;
+      background-color: var(--felt-dark);
+      overscroll-behavior: none;
+    }
+
+    /* 經典祖母綠賭桌絨布漸層紋理 */
+    .felt-bg {
+      background-image:
+        radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 0),
+        radial-gradient(circle at 50% 35%, var(--felt-light) 0%, var(--felt-mid) 52%, var(--felt-dark) 100%);
+      background-size: 16px 16px, 100% 100%;
+    }
+
+    /* 燙金玻璃擬態容器 */
+    .casino-panel {
+      background: rgba(6, 36, 27, 0.84);
+      border: 1px solid rgba(245, 197, 66, 0.36);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(10px);
+    }
+
+    /* 13 欄花色接龍軌道 (A ~ K 免左右捲動完整呈現) */
+    .board-row-grid {
+      display: grid;
+      grid-template-columns: clamp(22px, 5vw, 38px) repeat(13, minmax(0, 1fr));
+      gap: clamp(2px, 0.5vw, 5px);
+      align-items: center;
+    }
+
+    /* 牌桌卡槽 */
+    .board-slot {
+      height: clamp(32px, 8.2dvh, 66px);
+      border-radius: clamp(4px, 0.7vw, 7px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      position: relative;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .board-slot.empty {
+      border: 1px dashed rgba(255, 255, 255, 0.16);
+      background: rgba(0, 0, 0, 0.22);
+      color: rgba(255, 255, 255, 0.18);
+    }
+
+    .board-slot.empty.is-seven {
+      border-color: rgba(245, 197, 66, 0.55);
+      background: rgba(245, 197, 66, 0.1);
+      color: rgba(245, 197, 66, 0.65);
+    }
+
+    .board-slot.filled {
+      background: linear-gradient(160deg, #ffffff 0%, #f1f5f9 100%);
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+      animation: cardPop 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .board-slot.last-played {
+      border: 2px solid var(--gold);
+      box-shadow: 0 0 12px rgba(245, 197, 66, 0.9), 0 0 4px rgba(255, 255, 255, 0.85);
+      z-index: 5;
+    }
+
+    /* 手牌卡片：使用 clamp() 動態適應三端視口 */
+    .hand-card {
+      width: clamp(48px, 11vw, 72px);
+      height: clamp(70px, 13.5dvh, 104px);
+      border-radius: clamp(6px, 1vw, 10px);
+      background: linear-gradient(165deg, #ffffff 0%, #f8fafc 75%, #e2e8f0 100%);
+      border: 1.5px solid #cbd5e1;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: clamp(3px, 0.6dvh, 6px) clamp(4px, 0.7vw, 7px);
+      cursor: pointer;
+      transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.16s ease, opacity 0.16s ease, border-color 0.16s ease;
+      flex-shrink: 0;
+    }
+
+    .hand-card.playable {
+      border: 2px solid var(--gold);
+      box-shadow: 0 0 14px rgba(245, 197, 66, 0.78), 0 8px 16px rgba(0, 0, 0, 0.45);
+      transform: translateY(-9px);
+    }
+    .hand-card.playable:hover {
+      transform: translateY(-14px);
+    }
+
+    .hand-card.disabled {
+      opacity: 0.42;
+      filter: grayscale(25%);
+      cursor: not-allowed;
+      transform: translateY(2px);
+    }
+
+    .hand-card.cover-selectable {
+      border: 2px solid rgba(251, 146, 60, 0.78);
+      box-shadow: 0 4px 12px rgba(234, 88, 12, 0.35);
+    }
+    .hand-card.cover-selectable:hover {
+      transform: translateY(-7px);
+    }
+
+    .hand-card.selected-cover {
+      border: 2.5px solid #f97316;
+      box-shadow: 0 0 16px rgba(249, 115, 22, 0.95), 0 8px 18px rgba(0, 0, 0, 0.5);
+      transform: translateY(-14px);
+      z-index: 10;
+    }
+
+    /* 結算迷你牌 */
+    .mini-card {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1px;
+      padding: 2px 6px;
+      border-radius: 5px;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    }
+    .mini-card.penalty-seven {
+      background: #fef2f2;
+      border-color: #ef4444;
+      box-shadow: 0 0 6px rgba(239, 68, 68, 0.55);
+    }
+
+    /* 防跳動回合呼吸燈（僅改變外框光暈，不改變尺寸） */
+    @keyframes turnGlow {
+      0%, 100% { box-shadow: 0 0 0 1.5px rgba(245, 197, 66, 0.85), 0 0 12px rgba(245, 197, 66, 0.45); }
+      50% { box-shadow: 0 0 0 2px rgba(245, 197, 66, 1), 0 0 20px rgba(245, 197, 66, 0.8); }
+    }
+    .active-turn-glow {
+      animation: turnGlow 1.6s infinite ease-in-out;
+      border-color: var(--gold) !important;
+      background: rgba(245, 197, 66, 0.14) !important;
+    }
+
+    @keyframes cardPop {
+      0% { transform: scale(0.82); opacity: 0.35; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    /* 金色主按鈕 */
+    .btn-gold {
+      background: linear-gradient(135deg, #fbbf24 0%, #d97706 100%);
+      color: #1c1917;
+      font-weight: 800;
+      box-shadow: 0 4px 12px rgba(217, 119, 6, 0.38);
+      transition: filter 0.15s ease, transform 0.15s ease;
+    }
+    .btn-gold:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+    .btn-gold:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+    .btn-gold:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .suit-red { color: #dc2626; }
+    .suit-black { color: #0f172a; }
+
+    /* 自訂捲軸 */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb { background: rgba(245, 197, 66, 0.45); border-radius: 999px; }
+
+    /* ==================== 手機橫向矮螢幕強制緊湊自適應 ==================== */
+    @media (orientation: landscape) and (max-height: 540px) {
+      .landscape-hide {
+        display: none !important;
+      }
+
+      /* 大廳緊湊雙欄排版 */
+      #view-lobby {
+        padding: 6px 12px !important;
+      }
+      #lobby-header {
+        margin-bottom: 6px !important;
+      }
+      #lobby-card {
+        padding: 10px 14px !important;
+      }
+      .lobby-compact-grid {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 10px !important;
+        align-items: start;
+      }
+      #host-waiting-grid {
+        grid-template-columns: 180px 1fr !important;
+        gap: 10px !important;
+      }
+      #host-qrcode canvas, #host-qrcode img {
+        width: 112px !important;
+        height: 112px !important;
+      }
+
+      /* 遊戲主桌面一屏完整顯示（免捲動） */
+      #view-game {
+        padding: 4px 8px !important;
+        gap: 4px !important;
+      }
+      #game-header {
+        padding: 4px 10px !important;
+      }
+      #opponents-bar {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        justify-content: center !important;
+        gap: 6px !important;
+      }
+      .opponent-chip {
+        padding: 2px 8px !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 8px !important;
+        min-width: auto !important;
+      }
+      #board-panel {
+        padding: 4px 8px !important;
+      }
+      #stage-status-bar {
+        height: 30px !important;
+        margin-bottom: 4px !important;
+      }
+      #solitaire-board {
+        gap: 3px !important;
+      }
+      .board-slot {
+        height: clamp(22px, 8.6dvh, 36px) !important;
+        font-size: 10px !important;
+      }
+      #my-area {
+        padding: 4px 10px !important;
+      }
+      #my-area-header {
+        margin-bottom: 2px !important;
+      }
+      #my-hand-container {
+        min-height: clamp(64px, 20dvh, 84px) !important;
+        padding-top: 10px !important;
+        padding-bottom: 2px !important;
+      }
+      .hand-card {
+        width: clamp(44px, 6.4vw, 58px) !important;
+        height: clamp(58px, 18.5dvh, 76px) !important;
+        padding: 3px 4px !important;
+      }
+      .hand-card.playable {
+        transform: translateY(-6px) !important;
+      }
+      .hand-card.selected-cover {
+        transform: translateY(-9px) !important;
+      }
+    }
+  </style>
+</head>
+<body class="felt-bg flex flex-col">
+
+  <!-- ==================== 浮動通知列 (不影響版面高度) ==================== -->
+  <div id="toast-container" class="fixed top-12 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-1.5 pointer-events-none w-[92%] max-w-md"></div>
+
+  <!-- ==================== 畫面 1：首頁大廳 & 連線等待室 ==================== -->
+  <div id="view-lobby" class="h-[100dvh] w-full flex flex-col items-center justify-center p-3 sm:p-5 overflow-hidden">
+    <div class="w-full max-w-4xl max-h-full flex flex-col overflow-hidden">
+
+      <!-- 頂部品牌列與工具按鈕 -->
+      <header id="lobby-header" class="flex items-center justify-between gap-2 mb-3 shrink-0">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-amber-400/20 border border-amber-400/55 text-amber-300 text-lg font-black shadow shrink-0">♠7</span>
+          <div class="min-w-0">
+            <h1 class="text-lg sm:text-2xl font-black tracking-wide text-amber-300 truncate">排七撲克牌</h1>
+            <p class="landscape-hide text-[11px] sm:text-xs text-emerald-200/80 truncate">經典接龍・三段難度 AI・QR Code 多人連線</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button id="btn-lobby-audio" class="px-2.5 py-2 rounded-xl bg-black/35 hover:bg-black/55 border border-emerald-400/35 text-emerald-100 text-xs sm:text-sm font-bold transition" title="音樂與語音設定">🎵 音效</button>
+          <button id="btn-lobby-rules" class="px-2.5 py-2 rounded-xl bg-black/35 hover:bg-black/55 border border-amber-400/35 text-amber-200 text-xs sm:text-sm font-bold transition">📖 規則</button>
+          <button id="btn-lobby-fullscreen" class="px-2.5 py-2 rounded-xl bg-black/35 hover:bg-black/55 border border-amber-400/45 text-amber-300 text-xs sm:text-sm font-bold transition" title="切換全螢幕">⛶ 全螢幕</button>
+        </div>
+      </header>
+
+      <!-- 大廳主卡片（內容過長時僅卡片內部捲動，鎖定外層 100dvh） -->
+      <div id="lobby-card" class="casino-panel rounded-2xl w-full p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto flex flex-col gap-3">
+
+        <!-- 暱稱與模式分頁列（矮螢幕自動橫向並排） -->
+        <div class="lobby-compact-grid flex flex-col gap-3 shrink-0">
+          <div>
+            <label for="input-nickname" class="landscape-hide block text-xs font-bold text-amber-200/90 mb-1">玩家暱稱</label>
+            <div class="flex gap-2">
+              <input id="input-nickname" type="text" maxlength="12" placeholder="輸入暱稱（例：牌神小明）"
+                class="flex-1 min-w-0 px-3 py-2 rounded-xl bg-black/45 border border-emerald-400/35 focus:border-amber-400 focus:outline-none text-white placeholder-emerald-200/40 text-sm font-medium" />
+              <button id="btn-random-name" class="px-3 py-2 rounded-xl bg-emerald-900/75 hover:bg-emerald-800 border border-emerald-400/35 text-emerald-100 text-xs font-bold whitespace-nowrap transition">🎲 隨機</button>
+            </div>
+          </div>
+
+          <div id="lobby-tabs" class="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-black/45 border border-emerald-400/25">
+            <button data-tab="single" class="lobby-tab py-2 px-2 rounded-lg text-xs sm:text-sm font-bold transition bg-amber-400 text-stone-900 shadow">🤖 單機對戰</button>
+            <button data-tab="host" class="lobby-tab py-2 px-2 rounded-lg text-xs sm:text-sm font-bold transition text-emerald-100 hover:bg-white/10">🏠 建立房間</button>
+            <button data-tab="join" class="lobby-tab py-2 px-2 rounded-lg text-xs sm:text-sm font-bold transition text-emerald-100 hover:bg-white/10">📱 加入房間</button>
+          </div>
+        </div>
+
+        <!-- ===== 分頁 A：電腦單機對戰 ===== -->
+        <div id="panel-single" class="space-y-3">
+          <div class="lobby-compact-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <!-- 左欄：人數與 AI 難度 -->
+            <div class="p-3 rounded-xl bg-black/30 border border-emerald-400/20 space-y-2.5">
+              <div>
+                <div class="text-xs font-bold text-amber-200 mb-1.5">遊玩人數（3～6 人）</div>
+                <div class="grid grid-cols-4 gap-1.5" id="single-player-count-group">
+                  <button data-count="3" class="count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">3人</button>
+                  <button data-count="4" class="count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-amber-400 text-stone-900 border border-amber-300">4人</button>
+                  <button data-count="5" class="count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">5人</button>
+                  <button data-count="6" class="count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">6人</button>
+                </div>
+              </div>
+              <div>
+                <div class="text-xs font-bold text-amber-200 mb-1.5">AI 電腦難度</div>
+                <div class="grid grid-cols-3 gap-1.5" id="single-ai-diff-group">
+                  <button data-diff="easy" class="diff-btn py-1.5 rounded-lg text-xs font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">放水新手</button>
+                  <button data-diff="normal" class="diff-btn py-1.5 rounded-lg text-xs font-bold bg-amber-400 text-stone-900 border border-amber-300">普通</button>
+                  <button data-diff="master" class="diff-btn py-1.5 rounded-lg text-xs font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">大師</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 右欄：進階規則開關 -->
+            <div class="p-3 rounded-xl bg-black/30 border border-emerald-400/20 flex flex-col justify-between gap-2">
+              <div class="space-y-2">
+                <div class="text-xs font-bold text-amber-200">進階規則設定</div>
+                <label class="flex items-start gap-2 cursor-pointer text-xs sm:text-sm text-emerald-50">
+                  <input id="opt-single-clean-double" type="checkbox" class="mt-0.5 accent-amber-400 w-4 h-4 rounded shrink-0" checked />
+                  <span><strong>脫手獎勵</strong>：0 蓋牌者 0 分，其餘玩家總分 ×2</span>
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer text-xs sm:text-sm text-emerald-50">
+                  <input id="opt-single-cut-seven" type="checkbox" class="mt-0.5 accent-amber-400 w-4 h-4 rounded shrink-0" checked />
+                  <span><strong>斬龍罰分</strong>：被迫蓋掉 7 時，該張改計 20 分</span>
+                </label>
+              </div>
+              <button id="btn-start-single" class="btn-gold w-full py-2.5 sm:py-3 rounded-xl text-sm sm:text-base tracking-wide mt-1">
+                🃏 開始單機對戰
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 分頁 B：建立連線房間（房主） ===== -->
+        <div id="panel-host" class="hidden space-y-3">
+          <!-- 未開房設定 -->
+          <div id="host-setup-box" class="space-y-3">
+            <div class="lobby-compact-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="p-3 rounded-xl bg-black/30 border border-emerald-400/20 space-y-2.5">
+                <div>
+                  <div class="text-xs font-bold text-amber-200 mb-1.5">房間人數上限</div>
+                  <div class="grid grid-cols-4 gap-1.5">
+                    <button data-count="3" class="host-count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">3人</button>
+                    <button data-count="4" class="host-count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-amber-400 text-stone-900 border border-amber-300">4人</button>
+                    <button data-count="5" class="host-count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">5人</button>
+                    <button data-count="6" class="host-count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">6人</button>
+                  </div>
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-amber-200 mb-1.5">補位 AI 難度</div>
+                  <div class="grid grid-cols-3 gap-1.5">
+                    <button data-diff="easy" class="host-diff-btn py-1.5 rounded-lg text-xs font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">放水新手</button>
+                    <button data-diff="normal" class="host-diff-btn py-1.5 rounded-lg text-xs font-bold bg-amber-400 text-stone-900 border border-amber-300">普通</button>
+                    <button data-diff="master" class="host-diff-btn py-1.5 rounded-lg text-xs font-bold bg-black/40 border border-emerald-400/30 text-emerald-100">大師</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="p-3 rounded-xl bg-black/30 border border-emerald-400/20 flex flex-col justify-between gap-2">
+                <div class="space-y-2">
+                  <div class="text-xs font-bold text-amber-200">連線房進階規則</div>
+                  <label class="flex items-start gap-2 cursor-pointer text-xs sm:text-sm text-emerald-50">
+                    <input id="opt-host-clean-double" type="checkbox" class="mt-0.5 accent-amber-400 w-4 h-4 rounded shrink-0" checked />
+                    <span><strong>脫手獎勵</strong>：0 蓋牌者 0 分，其餘玩家總分 ×2</span>
+                  </label>
+                  <label class="flex items-start gap-2 cursor-pointer text-xs sm:text-sm text-emerald-50">
+                    <input id="opt-host-cut-seven" type="checkbox" class="mt-0.5 accent-amber-400 w-4 h-4 rounded shrink-0" checked />
+                    <span><strong>斬龍罰分</strong>：被迫蓋掉 7 時，該張改計 20 分</span>
+                  </label>
+                </div>
+                <button id="btn-create-room" class="btn-gold w-full py-2.5 sm:py-3 rounded-xl text-sm sm:text-base mt-1">
+                  📡 建立房間並產生 QR Code
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 已開房等待室（橫向矮螢幕自動雙欄橫排） -->
+          <div id="host-waiting-box" class="hidden space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-emerald-950/75 border border-amber-400/40">
+              <div class="flex items-center gap-2">
+                <span id="host-conn-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+                <span class="text-xs text-emerald-200/80">房號</span>
+                <span id="host-room-code-display" class="text-lg sm:text-2xl font-black tracking-widest text-amber-300 cursor-pointer">----</span>
+                <span id="host-sandbox-badge" class="hidden text-[10px] px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-200 border border-amber-400/40 font-bold">本機降級模式</span>
+              </div>
+              <div class="flex gap-1.5">
+                <button id="btn-copy-link" class="px-2.5 py-1.5 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/50 text-amber-200 text-xs font-bold transition">🔗 複製連結</button>
+                <button id="btn-close-room" class="px-2.5 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/35 border border-red-400/40 text-red-200 text-xs font-bold transition">關閉</button>
+              </div>
+            </div>
+
+            <div id="host-waiting-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-stretch">
+              <!-- QR Code 區 -->
+              <div class="flex flex-col items-center justify-center p-3 rounded-xl bg-black/30 border border-emerald-400/20">
+                <div class="text-[11px] font-bold text-amber-200 mb-1.5">📱 手機掃碼立即加入</div>
+                <div id="host-qrcode" class="bg-white p-2 rounded-xl shadow-lg"></div>
+                <p id="host-qr-hint" class="landscape-hide text-[10px] text-emerald-200/65 mt-1.5 text-center break-all line-clamp-2"></p>
+              </div>
+
+              <!-- 玩家名單與開始按鈕 -->
+              <div class="flex flex-col justify-between p-3 rounded-xl bg-black/30 border border-emerald-400/20 gap-2">
+                <div class="min-h-0 flex-1 flex flex-col">
+                  <div class="flex items-center justify-between mb-1.5 shrink-0">
+                    <span class="text-xs font-bold text-amber-200">房間玩家</span>
+                    <span id="host-player-ratio" class="text-xs font-bold text-emerald-300">1 / 4</span>
+                  </div>
+                  <ul id="host-player-list" class="space-y-1.5 overflow-y-auto max-h-36"></ul>
+                </div>
+                <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/10 shrink-0">
+                  <button id="btn-fill-ai" class="py-2 rounded-xl bg-emerald-700/80 hover:bg-emerald-600 border border-emerald-400/40 text-white text-xs font-bold transition">
+                    🤖 補滿 AI
+                  </button>
+                  <button id="btn-host-start-game" class="btn-gold py-2 rounded-xl text-xs sm:text-sm" disabled>
+                    🃏 開始對戰
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 分頁 C：加入房間（玩家端） ===== -->
+        <div id="panel-join" class="hidden space-y-3">
+          <div id="join-form-box" class="lobby-compact-grid flex flex-col gap-3">
+            <div class="p-3.5 rounded-xl bg-black/30 border border-emerald-400/20 space-y-2">
+              <label for="input-room-code" class="block text-xs font-bold text-amber-200">輸入 4 碼房間代碼</label>
+              <input id="input-room-code" type="text" maxlength="6" placeholder="例如：A7K9"
+                class="w-full px-4 py-2.5 rounded-xl bg-black/50 border border-emerald-400/35 focus:border-amber-400 focus:outline-none text-center text-xl sm:text-2xl font-black tracking-[0.35em] uppercase text-amber-300 placeholder-emerald-200/30" />
+              <p class="landscape-hide text-xs text-emerald-200/75 text-center">透過 QR Code 掃碼進入會自動帶入房號</p>
+            </div>
+            <div class="flex flex-col justify-center gap-2">
+              <button id="btn-join-room" class="btn-gold w-full py-3 rounded-xl text-sm sm:text-base">
+                🚀 連線加入房間
+              </button>
+            </div>
+          </div>
+
+          <!-- 連線等待室 -->
+          <div id="client-waiting-box" class="hidden space-y-3">
+            <div class="flex items-center justify-between p-3 rounded-xl bg-emerald-950/75 border border-emerald-400/35">
+              <div class="flex items-center gap-2.5">
+                <span id="client-conn-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+                <div>
+                  <div id="client-conn-status" class="text-xs sm:text-sm font-bold text-amber-200">正在連線至房主...</div>
+                  <div id="client-room-info" class="text-[11px] text-emerald-200/75">房號：----</div>
+                </div>
+              </div>
+              <button id="btn-leave-room" class="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/35 border border-red-400/40 text-red-200 text-xs font-bold">離開</button>
+            </div>
+            <div class="p-3 rounded-xl bg-black/30 border border-emerald-400/20">
+              <div class="flex items-center justify-between mb-1.5">
+                <span class="text-xs font-bold text-amber-200">等待房主開始遊戲...</span>
+                <span id="client-player-ratio" class="text-xs font-bold text-emerald-300">-- / --</span>
+              </div>
+              <ul id="client-player-list" class="space-y-1.5 max-h-36 overflow-y-auto"></ul>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <footer class="landscape-hide mt-2 text-[11px] text-emerald-200/55 text-center shrink-0">
+        免後端伺服器・支援電腦桌面、手機直式／橫向全螢幕遊玩・沙盒受限自動無縫降級單機
+      </footer>
+    </div>
+  </div>
+
+  <!-- ==================== 畫面 2：遊戲主桌面 (100dvh 鎖定) ==================== -->
+  <div id="view-game" class="hidden h-[100dvh] w-full max-w-6xl mx-auto p-2 sm:p-3 flex flex-col gap-1.5 sm:gap-2.5 overflow-hidden">
+
+    <!-- 頂部工具列 -->
+    <header id="game-header" class="flex items-center justify-between gap-2 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl casino-panel shrink-0">
+      <div class="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
+        <span id="game-round-badge" class="px-2 py-0.5 rounded-lg bg-amber-400/20 border border-amber-400/45 text-amber-300 text-[11px] sm:text-xs font-black whitespace-nowrap">第 1 局</span>
+        <div class="flex items-center gap-1.5 text-[11px] sm:text-xs text-emerald-200 truncate">
+          <span id="game-conn-dot" class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
+          <span id="game-room-text" class="font-bold truncate">單機對戰</span>
+        </div>
+        <button id="btn-ingame-qr" class="hidden px-2 py-0.5 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/40 text-amber-200 text-[11px] font-bold whitespace-nowrap">📱 QR</button>
+      </div>
+
+      <div class="flex items-center gap-1 sm:gap-1.5 shrink-0">
+        <button id="btn-game-audio" class="px-2 py-1 rounded-lg bg-black/35 hover:bg-black/55 border border-emerald-400/30 text-emerald-100 text-xs font-bold transition" title="音樂與語音設定">🎵</button>
+        <button id="btn-game-rules" class="px-2 py-1 rounded-lg bg-black/35 hover:bg-black/55 border border-amber-400/30 text-amber-200 text-xs font-bold transition">📖</button>
+        <button id="btn-game-fullscreen" class="px-2 py-1 rounded-lg bg-black/35 hover:bg-black/55 border border-amber-400/45 text-amber-300 text-xs font-bold transition" title="切換全螢幕">⛶ 全螢幕</button>
+        <button id="btn-game-exit" class="px-2 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/35 border border-red-400/35 text-red-200 text-xs font-bold transition">離開</button>
+      </div>
+    </header>
+
+    <!-- 對手狀態列 -->
+    <section id="opponents-bar" class="grid grid-cols-3 sm:flex sm:flex-wrap sm:justify-center gap-1.5 sm:gap-2.5 shrink-0"></section>
+
+    <!-- 中央主舞台：四花色接龍牌桌 -->
+    <main id="board-panel" class="flex-1 min-h-0 flex flex-col justify-center casino-panel rounded-2xl p-2 sm:p-3.5 overflow-hidden">
+
+      <!-- 防跳動中央動態資訊區與倒數計時器（固定高度與寬度，嚴禁 animate-ping） -->
+      <div id="stage-status-bar" class="h-9 sm:h-10 w-full shrink-0 mb-1.5 sm:mb-2 px-2.5 rounded-xl bg-black/40 border border-emerald-400/25 flex items-center justify-between gap-2 transition-colors duration-200">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <span id="stage-status-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+          <span id="turn-status-text" class="text-xs sm:text-sm font-black text-amber-200 truncate">準備中...</span>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0">
+          <!-- 蓋牌確認鍵固定放置於資訊列內，顯示/隱藏不改變舞台高度 -->
+          <button id="btn-confirm-cover" class="hidden px-3 py-1 rounded-lg bg-white text-orange-700 font-black text-xs shadow hover:bg-orange-50 transition whitespace-nowrap">
+            確認蓋牌
+          </button>
+          <span id="active-rules-tag" class="hidden md:inline text-[11px] text-emerald-200/70 whitespace-nowrap"></span>
+          <!-- 固定寬高倒數計時器 -->
+          <div id="turn-timer-box" class="w-16 h-7 rounded-lg bg-black/55 border border-amber-400/40 flex items-center justify-center text-xs font-black tabular-nums text-amber-300 shrink-0">
+            ⏱ <span id="turn-timer-val">--</span>s
+          </div>
+        </div>
+      </div>
+
+      <!-- 4 條花色軌道 (♠ ♥ ♦ ♣) -->
+      <div id="solitaire-board" class="flex-1 min-h-0 flex flex-col justify-center gap-1 sm:gap-2"></div>
+    </main>
+
+    <!-- 下方個人手牌區 -->
+    <section id="my-area" class="casino-panel rounded-2xl p-2 sm:p-3 shrink-0">
+      <div id="my-area-header" class="flex items-center justify-between mb-1 px-1">
+        <div class="flex items-center gap-2 min-w-0">
+          <!-- 使用 animate-pulse 防跳動，絕不使用 animate-ping -->
+          <span id="my-turn-indicator" class="w-2.5 h-2.5 rounded-full bg-emerald-500/40 shrink-0"></span>
+          <span id="my-name-display" class="text-xs sm:text-sm font-black text-white truncate">我</span>
+          <span id="my-hand-count" class="text-[11px] px-2 py-0.5 rounded-full bg-black/45 text-emerald-200 shrink-0">剩 0 張</span>
+        </div>
+        <span id="my-covered-info" class="text-[11px] sm:text-xs px-2.5 py-0.5 rounded-full bg-black/45 border border-amber-400/35 text-amber-200 font-bold shrink-0">
+          已蓋：0 張 (0 分)
+        </span>
+      </div>
+
+      <div id="my-hand-container" class="flex items-end justify-start sm:justify-center gap-1 sm:gap-1.5 overflow-x-auto pt-3.5 pb-1 px-1 min-h-[88px] sm:min-h-[120px]"></div>
+    </section>
+  </div>
+
+  <!-- ==================== 彈窗 1：三段式固定底部確定鍵結算彈窗 (Sticky Footer Modal) ==================== -->
+  <div id="modal-results" class="hidden fixed inset-0 z-40 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+    <div class="casino-panel rounded-2xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
+      <!-- 頂部固定標題 (shrink-0) -->
+      <div class="shrink-0 p-3.5 sm:p-4 border-b border-amber-400/30 flex items-center justify-between bg-emerald-950/75">
+        <div class="min-w-0">
+          <h2 class="text-lg sm:text-2xl font-black text-amber-300 truncate">🏆 本局結算戰績</h2>
+          <p id="results-subtitle" class="text-xs text-emerald-200/85 mt-0.5 truncate">點數最低者獲勝！</p>
+        </div>
+        <span id="results-round-label" class="px-3 py-1 rounded-full bg-amber-400/20 border border-amber-400/45 text-amber-200 text-xs font-bold shrink-0">第 1 局</span>
+      </div>
+
+      <!-- 中間獨立捲動戰績明細區 (flex-1 overflow-y-auto) -->
+      <div id="results-table-wrap" class="flex-1 overflow-y-auto p-3.5 sm:p-4 space-y-2"></div>
+
+      <!-- 底部永遠固定按鈕列 (shrink-0) -->
+      <div class="shrink-0 p-3.5 sm:p-4 border-t border-white/15 bg-black/45 flex items-center justify-between gap-2">
+        <button id="btn-results-lobby" class="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-bold transition">返回大廳</button>
+        <div class="flex items-center gap-2">
+          <span id="client-wait-next-hint" class="hidden text-xs text-amber-200 font-bold">等待房主開啟下一局...</span>
+          <button id="btn-play-again" class="btn-gold px-5 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm">✓ 確定 / 再來一局</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 彈窗 2：AudioMediaEngine 音樂與語音控制中心 ==================== -->
+  <div id="modal-audio" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3">
+    <div class="casino-panel rounded-2xl w-full max-w-md max-h-[92dvh] flex flex-col overflow-hidden">
+      <div class="shrink-0 p-3.5 border-b border-amber-400/25 flex items-center justify-between bg-emerald-950/70">
+        <h3 class="text-base sm:text-lg font-black text-amber-300">🎵 音效與音樂控制中心</h3>
+        <button id="btn-close-audio" class="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold">✕</button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto p-4 space-y-4 text-xs sm:text-sm">
+        <!-- 總靜音與 BGM 開關 -->
+        <div class="flex items-center justify-between gap-2 p-3 rounded-xl bg-black/35 border border-emerald-400/25">
+          <span class="font-bold text-white">總音效開關</span>
+          <button id="btn-audio-master-mute" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white font-bold text-xs transition">🔊 開啟中</button>
+        </div>
+
+        <!-- 背景音樂來源切換 -->
+        <div class="p-3 rounded-xl bg-black/35 border border-emerald-400/25 space-y-2.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-amber-200">背景音樂 (BGM)</span>
+            <button id="btn-bgm-toggle" class="px-3 py-1 rounded-lg bg-amber-400/20 border border-amber-400/50 text-amber-200 text-xs font-bold">▶ 播放五聲音階</button>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-emerald-200/80 w-12 shrink-0">音量</span>
+            <input id="slider-bgm-vol" type="range" min="0" max="100" value="35" class="flex-1 accent-amber-400" />
+            <span id="val-bgm-vol" class="w-9 text-right font-bold tabular-nums text-amber-200">35%</span>
+          </div>
+          <!-- 匯入本機 MP3/WAV -->
+          <div class="pt-2 border-t border-white/10 space-y-1.5">
+            <label class="block text-[11px] text-emerald-200/80">匯入本機音樂檔循環播放（.mp3 / .wav）</label>
+            <div class="flex items-center gap-2">
+              <label class="flex-1 text-center py-2 px-3 rounded-lg bg-emerald-900/70 hover:bg-emerald-800 border border-emerald-400/35 text-emerald-100 text-xs font-bold cursor-pointer truncate">
+                📂 選擇本機音檔
+                <input id="input-custom-bgm" type="file" accept=".mp3,.wav,audio/*" class="hidden" />
+              </label>
+              <button id="btn-reset-pentatonic" class="px-3 py-2 rounded-lg bg-black/45 hover:bg-black/65 border border-white/15 text-emerald-200 text-xs font-bold whitespace-nowrap">切回五聲音階</button>
+            </div>
+            <div id="custom-bgm-name" class="text-[11px] text-amber-300/90 truncate">目前音源：內建東方五聲音階合成音樂</div>
+          </div>
+        </div>
+
+        <!-- 互動音效音量 -->
+        <div class="p-3 rounded-xl bg-black/35 border border-emerald-400/25 space-y-2">
+          <div class="font-bold text-amber-200">互動合成音效 (出牌 / 蓋牌 / 勝利)</div>
+          <div class="flex items-center gap-2">
+            <span class="text-emerald-200/80 w-12 shrink-0">音量</span>
+            <input id="slider-sfx-vol" type="range" min="0" max="100" value="75" class="flex-1 accent-amber-400" />
+            <span id="val-sfx-vol" class="w-9 text-right font-bold tabular-nums text-amber-200">75%</span>
+          </div>
+        </div>
+
+        <!-- 繁體中文語音播報 -->
+        <div class="p-3 rounded-xl bg-black/35 border border-emerald-400/25 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-amber-200">繁體中文語音播報 (Web Speech)</span>
+            <label class="flex items-center gap-1.5 cursor-pointer text-xs">
+              <input id="chk-speech-enable" type="checkbox" class="accent-amber-400 w-4 h-4" checked />
+              <span>啟用</span>
+            </label>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-emerald-200/80 w-12 shrink-0">音量</span>
+            <input id="slider-speech-vol" type="range" min="0" max="100" value="85" class="flex-1 accent-amber-400" />
+            <span id="val-speech-vol" class="w-9 text-right font-bold tabular-nums text-amber-200">85%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="shrink-0 p-3 border-t border-white/10 bg-black/40 flex justify-end">
+        <button id="btn-audio-done" class="btn-gold px-5 py-2 rounded-xl text-xs sm:text-sm">完成設定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 彈窗 3：規則說明 ==================== -->
+  <div id="modal-rules" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3">
+    <div class="casino-panel rounded-2xl w-full max-w-lg max-h-[90dvh] flex flex-col overflow-hidden">
+      <div class="shrink-0 p-3.5 border-b border-amber-400/25 flex items-center justify-between bg-emerald-950/70">
+        <h3 class="text-base sm:text-lg font-black text-amber-300">📖 排七（接龍／憋七）規則</h3>
+        <button id="btn-close-rules" class="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 text-xs sm:text-sm text-emerald-50/90 space-y-2.5 leading-relaxed">
+        <p><strong class="text-amber-200">1. 起手：</strong>一副 52 張牌平均發給 3～6 人，拿到 <strong>黑桃 7 (♠7)</strong> 的玩家先攻，第一手必須打出 ♠7。</p>
+        <p><strong class="text-amber-200">2. 強制接龍：</strong>順時針輪流出牌。合法牌為「任何花色的 7」或「桌上已有花色的相鄰點數（7 往上接 8～K，往下接 6～A）」。有牌可出時必須出牌，不可蓋牌。</p>
+        <p><strong class="text-amber-200">3. 蓋牌防誤觸：</strong>若完全無合法牌可出，點選任一張手牌後再點一次或按上方「確認蓋牌」面朝下蓋牌。</p>
+        <p><strong class="text-amber-200">4. 計分與進階變體：</strong>手牌全數出完／蓋完後攤開蓋牌計分（A=1、2～10=牌面、J=11、Q=12、K=13），<strong>總分最低者勝</strong>。可自由開啟「脫手獎勵（0 蓋牌者 0 分，其餘玩家 ×2）」與「斬龍罰分（蓋 7 計 20 分）」。</p>
+      </div>
+      <div class="shrink-0 p-3 border-t border-white/10 bg-black/40 flex justify-end">
+        <button id="btn-rules-ok" class="btn-gold px-5 py-2 rounded-xl text-xs sm:text-sm">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 彈窗 4：遊戲中查看 QR Code ==================== -->
+  <div id="modal-qr" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="casino-panel rounded-2xl w-full max-w-xs p-4 flex flex-col items-center text-center space-y-3">
+      <div class="w-full flex items-center justify-between">
+        <h3 class="text-base font-black text-amber-300">📱 房間邀請碼</h3>
+        <button id="btn-close-qr" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold">✕</button>
+      </div>
+      <div id="modal-qrcode-box" class="bg-white p-2.5 rounded-xl"></div>
+      <div class="text-sm font-black tracking-widest text-amber-200" id="modal-qr-code-text">----</div>
+      <button id="btn-modal-copy-link" class="btn-gold w-full py-2 rounded-xl text-xs">🔗 複製邀請連結</button>
+    </div>
+  </div>
+
+  <!-- ==================== 彈窗 5：自訂確認對話框（嚴禁使用 alert/confirm） ==================== -->
+  <div id="modal-dialog" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="casino-panel rounded-2xl w-full max-w-sm p-5 space-y-4">
+      <h3 id="dialog-title" class="text-base sm:text-lg font-black text-amber-300">提示</h3>
+      <p id="dialog-message" class="text-xs sm:text-sm text-emerald-50/90 leading-relaxed"></p>
+      <div class="flex justify-end gap-2">
+        <button id="dialog-cancel" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-bold">取消</button>
+        <button id="dialog-confirm" class="btn-gold px-5 py-2 rounded-xl text-xs sm:text-sm">確定</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * =========================================================================
+     * 排七撲克牌 (Sevens) - 跨裝置全螢幕與多人連線完整版
+     * =========================================================================
+     */
+
+    // -------------------- 常數與花色定義 --------------------
+    const SUITS = [
+      { id: 'S', symbol: '♠', name: '黑桃', colorClass: 'suit-black' },
+      { id: 'H', symbol: '♥', name: '紅心', colorClass: 'suit-red' },
+      { id: 'D', symbol: '♦', name: '方塊', colorClass: 'suit-red' },
+      { id: 'C', symbol: '♣', name: '梅花', colorClass: 'suit-black' }
+    ];
+    const SUIT_MAP = Object.fromEntries(SUITS.map(s => [s.id, s]));
+    const SUIT_ORDER = { S: 0, H: 1, D: 2, C: 3 };
+    const RANK_LABELS = { 1: 'A', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9', 10: '10', 11: 'J', 12: 'Q', 13: 'K' };
+    const PEER_PREFIX = 'tw-sevens-pro-v2-';
+    const TURN_SECONDS = 25;
+
+    const AI_NAMES = ['AI 阿明', 'AI 小美', 'AI 牌神', 'AI 大衛', 'AI 靜香', 'AI 豪哥', 'AI 露西'];
+    const RANDOM_NICKNAMES = ['幸運星', '排七高手', '黑桃七', '撲克俠', '神手小王', '接龍達人', '冷面牌王'];
+
+    // -------------------- AudioMediaEngine：音效、五聲音階 BGM、本機匯入、中文語音 --------------------
+    const AudioMediaEngine = (() => {
+      let ctx = null;
+      let muted = false;
+      let bgmPlaying = false;
+      let bgmSource = 'pentatonic'; // 'pentatonic' | 'custom'
+      let bgmVol = 0.35;
+      let sfxVol = 0.75;
+      let speechVol = 0.85;
+      let speechEnabled = true;
+
+      let pentatonicTimer = null;
+      let customAudioEl = null;
+      let customFileUrl = null;
+      let noteStep = 0;
+
+      // 東方五聲音階頻率 (C4, D4, E4, G4, A4, C5, D5, E5)
+      const PENTATONIC_NOTES = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25];
+      const MELODY_PATTERN = [0, 2, 3, 4, 5, 4, 3, 2, 1, 3, 4, 2, 0, 4, 3, 1];
+
+      function ensureCtx() {
+        try {
+          if (!ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtx) ctx = new AudioCtx();
+          }
+          if (ctx && ctx.state === 'suspended') ctx.resume();
+        } catch (e) {}
+      }
+
+      function playTone(freq, duration, type = 'sine', baseGain = 0.16, delay = 0) {
+        if (muted || sfxVol <= 0) return;
+        ensureCtx();
+        if (!ctx) return;
+        try {
+          const now = ctx.currentTime + delay;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = type;
+          osc.frequency.setValueAtTime(freq, now);
+          const peak = Math.max(0.001, baseGain * sfxVol);
+          gain.gain.setValueAtTime(0.0001, now);
+          gain.gain.exponentialRampToValueAtTime(peak, now + 0.015);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + duration + 0.03);
+        } catch (e) {}
+      }
+
+      function playPentatonicPluck() {
+        if (!bgmPlaying || muted || bgmVol <= 0 || bgmSource !== 'pentatonic') return;
+        ensureCtx();
+        if (!ctx) return;
+        try {
+          const idx = MELODY_PATTERN[noteStep % MELODY_PATTERN.length];
+          noteStep++;
+          const freq = PENTATONIC_NOTES[idx];
+          const now = ctx.currentTime;
+
+          const osc = ctx.createOscillator();
+          const filter = ctx.createBiquadFilter();
+          const gain = ctx.createGain();
+
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, now);
+
+          filter.type = 'lowpass';
+          filter.frequency.setValueAtTime(1100, now);
+
+          const peak = Math.max(0.001, 0.12 * bgmVol);
+          gain.gain.setValueAtTime(0.0001, now);
+          gain.gain.exponentialRampToValueAtTime(peak, now + 0.04);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.72);
+
+          osc.connect(filter);
+          filter.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.78);
+        } catch (e) {}
+      }
+
+      function startBGM() {
+        stopBGM(false);
+        bgmPlaying = true;
+        if (bgmSource === 'custom' && customAudioEl) {
+          customAudioEl.volume = muted ? 0 : bgmVol;
+          customAudioEl.play().catch(() => {});
+        } else {
+          ensureCtx();
+          playPentatonicPluck();
+          pentatonicTimer = setInterval(playPentatonicPluck, 680);
+        }
+        syncAudioUI();
+      }
+
+      function stopBGM(updateUI = true) {
+        bgmPlaying = false;
+        if (pentatonicTimer) {
+          clearInterval(pentatonicTimer);
+          pentatonicTimer = null;
+        }
+        if (customAudioEl) {
+          try { customAudioEl.pause(); } catch (e) {}
+        }
+        if (updateUI) syncAudioUI();
+      }
+
+      function loadCustomFile(file) {
+        if (!file) return;
+        try {
+          if (customFileUrl) URL.revokeObjectURL(customFileUrl);
+          customFileUrl = URL.createObjectURL(file);
+          if (!customAudioEl) {
+            customAudioEl = new Audio();
+            customAudioEl.loop = true;
+          }
+          customAudioEl.src = customFileUrl;
+          customAudioEl.volume = muted ? 0 : bgmVol;
+          bgmSource = 'custom';
+          document.getElementById('custom-bgm-name').textContent = `目前音源：${file.name}`;
+          startBGM();
+          showToast(`🎵 已匯入並播放：${file.name}`, 'gold');
+        } catch (e) {
+          showToast('音檔讀取失敗，請換一個 MP3 或 WAV 檔案', 'error');
+        }
+      }
+
+      function usePentatonic() {
+        bgmSource = 'pentatonic';
+        document.getElementById('custom-bgm-name').textContent = '目前音源：內建東方五聲音階合成音樂';
+        if (bgmPlaying) startBGM();
+        else syncAudioUI();
+      }
+
+      function speak(text) {
+        if (muted || !speechEnabled || speechVol <= 0 || !text) return;
+        try {
+          if (!('speechSynthesis' in window)) return;
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(text);
+          utter.lang = 'zh-TW';
+          utter.rate = 1.08;
+          utter.volume = speechVol;
+          window.speechSynthesis.speak(utter);
+        } catch (e) {}
+      }
+
+      function syncAudioUI() {
+        const masterBtn = document.getElementById('btn-audio-master-mute');
+        const bgmBtn = document.getElementById('btn-bgm-toggle');
+        const lobbyBtn = document.getElementById('btn-lobby-audio');
+        const gameBtn = document.getElementById('btn-game-audio');
+
+        if (masterBtn) {
+          masterBtn.textContent = muted ? '🔇 已靜音' : '🔊 開啟中';
+          masterBtn.className = muted
+            ? 'px-3.5 py-1.5 rounded-lg bg-red-600/80 text-white font-bold text-xs transition'
+            : 'px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white font-bold text-xs transition';
+        }
+        if (bgmBtn) {
+          bgmBtn.textContent = bgmPlaying ? '⏸ 暫停背景音樂' : (bgmSource === 'custom' ? '▶ 播放本機音樂' : '▶ 播放五聲音階');
+        }
+        if (lobbyBtn) lobbyBtn.textContent = muted ? '🔇 靜音' : '🎵 音效';
+        if (gameBtn) gameBtn.textContent = muted ? '🔇' : '🎵';
+      }
+
+      return {
+        toggleMute() {
+          muted = !muted;
+          if (customAudioEl) customAudioEl.volume = muted ? 0 : bgmVol;
+          if (muted && 'speechSynthesis' in window) {
+            try { window.speechSynthesis.cancel(); } catch (e) {}
+          }
+          syncAudioUI();
+          if (!muted) this.click();
+        },
+        toggleBGM() {
+          if (bgmPlaying) stopBGM();
+          else startBGM();
+        },
+        setBgmVol(v) {
+          bgmVol = Math.max(0, Math.min(1, v));
+          if (customAudioEl) customAudioEl.volume = muted ? 0 : bgmVol;
+        },
+        setSfxVol(v) { sfxVol = Math.max(0, Math.min(1, v)); },
+        setSpeechVol(v) { speechVol = Math.max(0, Math.min(1, v)); },
+        setSpeechEnabled(on) { speechEnabled = !!on; },
+        loadCustomFile,
+        usePentatonic,
+        speak,
+        syncAudioUI,
+        click() { playTone(520, 0.06, 'triangle', 0.1); },
+        playCard() {
+          playTone(380, 0.07, 'triangle', 0.16, 0);
+          playTone(580, 0.09, 'sine', 0.14, 0.04);
+        },
+        coverCard() {
+          playTone(205, 0.11, 'sawtooth', 0.1, 0);
+          playTone(150, 0.14, 'triangle', 0.11, 0.05);
+        },
+        myTurn() {
+          playTone(587.33, 0.11, 'sine', 0.14, 0);
+          playTone(880.00, 0.18, 'sine', 0.15, 0.1);
+        },
+        win() {
+          [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => playTone(f, 0.22, 'triangle', 0.15, i * 0.1));
+        }
+      };
+    })();
+
+    // -------------------- Fullscreen API 工具 --------------------
+    function toggleFullscreen() {
+      AudioMediaEngine.click();
+      try {
+        const doc = document;
+        const el = doc.documentElement;
+        const isFs = doc.fullscreenElement || doc.webkitFullscreenElement;
+        if (!isFs) {
+          if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+          else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        } else {
+          if (doc.exitFullscreen) doc.exitFullscreen().catch(() => {});
+          else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+        }
+      } catch (e) {
+        showToast('此瀏覽器不支援一鍵全螢幕，可改用「加入主畫面」', 'info');
+      }
+    }
+
+    function updateFullscreenLabels() {
+      const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      const label = isFs ? '✕ 退出全螢幕' : '⛶ 全螢幕';
+      const b1 = document.getElementById('btn-lobby-fullscreen');
+      const b2 = document.getElementById('btn-game-fullscreen');
+      if (b1) b1.textContent = label;
+      if (b2) b2.textContent = isFs ? '✕ 退出' : '⛶ 全螢幕';
+    }
+    document.addEventListener('fullscreenchange', updateFullscreenLabels);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenLabels);
+
+    // -------------------- 通用工具函式 --------------------
+    function cardId(card) { return `${card.suit}-${card.rank}`; }
+    function cardText(card) { return `${SUIT_MAP[card.suit].symbol}${RANK_LABELS[card.rank]}`; }
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
+    }
+
+    function sortHand(hand) {
+      return [...hand].sort((a, b) => {
+        if (SUIT_ORDER[a.suit] !== SUIT_ORDER[b.suit]) return SUIT_ORDER[a.suit] - SUIT_ORDER[b.suit];
+        return a.rank - b.rank;
+      });
+    }
+
+    function generateRoomCode() {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let code = '';
+      for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+      return code;
+    }
+
+    function getInviteUrl(roomCode) {
+      try {
+        const base = window.location.href.split('?')[0].split('#')[0];
+        return `${base}?room=${encodeURIComponent(roomCode)}`;
+      } catch (e) {
+        return `?room=${roomCode}`;
+      }
+    }
+
+    function copyTextToClipboard(text) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) {
+          showToast('✅ 已複製邀請網址！', 'gold');
+          return;
+        }
+      } catch (e) {}
+      showToast('⚠️ 無法自動複製，請直接分享房號', 'warn');
+    }
+
+    function showToast(msg, type = 'info') {
+      const container = document.getElementById('toast-container');
+      const el = document.createElement('div');
+      const colorMap = {
+        info: 'bg-emerald-950/92 border-emerald-400/50 text-emerald-50',
+        gold: 'bg-amber-950/95 border-amber-400 text-amber-200',
+        warn: 'bg-orange-950/95 border-orange-400 text-orange-100',
+        error: 'bg-red-950/95 border-red-400 text-red-100'
+      };
+      el.className = `px-3.5 py-1.5 rounded-full border shadow-xl text-xs sm:text-sm font-bold backdrop-blur-md transition-all duration-300 opacity-0 translate-y-[-6px] ${colorMap[type] || colorMap.info}`;
+      el.textContent = msg;
+      container.appendChild(el);
+      requestAnimationFrame(() => el.classList.remove('opacity-0', 'translate-y-[-6px]'));
+      setTimeout(() => {
+        el.classList.add('opacity-0', 'translate-y-[-6px]');
+        setTimeout(() => el.remove(), 300);
+      }, 2200);
+    }
+
+    function showDialog({ title = '提示', message = '', showCancel = false, confirmText = '確定', onConfirm = null }) {
+      const modal = document.getElementById('modal-dialog');
+      document.getElementById('dialog-title').textContent = title;
+      document.getElementById('dialog-message').textContent = message;
+      const btnCancel = document.getElementById('dialog-cancel');
+      const btnConfirm = document.getElementById('dialog-confirm');
+      btnConfirm.textContent = confirmText;
+      btnCancel.classList.toggle('hidden', !showCancel);
+      const close = () => modal.classList.add('hidden');
+      btnCancel.onclick = () => { AudioMediaEngine.click(); close(); };
+      btnConfirm.onclick = () => { AudioMediaEngine.click(); close(); if (onConfirm) onConfirm(); };
+      modal.classList.remove('hidden');
+    }
+
+    // -------------------- 全域狀態管理 --------------------
+    const AppState = {
+      mode: 'single',            // 'single' | 'host' | 'client'
+      sandboxDegraded: false,
+      singlePlayerCount: 4,
+      hostMaxPlayers: 4,
+      aiDifficulty: 'normal',    // 'easy' | 'normal' | 'master'
+      roomCode: '',
+      myPlayerId: 'local-human',
+      selectedCoverCardId: null,
+      aiTimer: null,
+      turnTickTimer: null,
+      turnDeadline: 0,
+
+      peer: null,
+      hostConnections: new Map(),
+      clientConn: null,
+
+      lobbyPlayers: [],
+      rules: {
+        cleanSweepDouble: true,
+        cutSevenPenalty: true
+      },
+
+      hostGame: null,
+      viewState: null
+    };
+
+    // -------------------- 排七核心規則引擎 --------------------
+    function createDeck() {
+      const deck = [];
+      for (const s of SUITS) {
+        for (let r = 1; r <= 13; r++) deck.push({ suit: s.id, rank: r });
+      }
+      for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+      }
+      return deck;
+    }
+
+    function createEmptyBoard() {
+      return {
+        S: { low: null, high: null },
+        H: { low: null, high: null },
+        D: { low: null, high: null },
+        C: { low: null, high: null }
+      };
+    }
+
+    function isCardPlayable(card, board, isFirstMove) {
+      if (isFirstMove) return card.suit === 'S' && card.rank === 7;
+      const lane = board[card.suit];
+      if (card.rank === 7) return lane.low === null;
+      if (lane.low === null) return false;
+      return card.rank === lane.low - 1 || card.rank === lane.high + 1;
+    }
+
+    function getLegalCards(hand, board, isFirstMove) {
+      return hand.filter(c => isCardPlayable(c, board, isFirstMove));
+    }
+
+    function getCoverCardPoints(card, rules) {
+      if (card.rank === 7 && rules.cutSevenPenalty) return 20;
+      return card.rank;
+    }
+
+    // 三段難度 AI 決策引擎：easy (放水新手) / normal (普通) / master (大師)
+    function chooseAIMove(player, game) {
+      const diff = game.aiDifficulty || 'normal';
+      const legal = getLegalCards(player.hand, game.board, game.isFirstMove);
+
+      // ===== 1. 有合法牌可出 =====
+      if (legal.length > 0) {
+        // 放水新手：隨機打出一張合法牌
+        if (diff === 'easy') {
+          return { action: 'play', card: legal[Math.floor(Math.random() * legal.length)] };
+        }
+
+        let bestCard = legal[0];
+        let bestScore = -99999;
+
+        for (const card of legal) {
+          let score = 0;
+          const sameSuit = player.hand.filter(c => c.suit === card.suit && c.rank !== card.rank);
+          const higherOwned = sameSuit.filter(c => c.rank > card.rank);
+          const lowerOwned = sameSuit.filter(c => c.rank < card.rank);
+
+          if (diff === 'normal') {
+            // 普通難度：優先延伸自己手牌較多的花色
+            if (card.rank === 7) {
+              score += sameSuit.length * 14;
+            } else if (card.rank > 7) {
+              score += higherOwned.length * 20 + card.rank * 0.6;
+            } else {
+              score += lowerOwned.length * 20 + (14 - card.rank) * 0.5;
+            }
+            score += Math.random() * 2;
+          } else {
+            // 大師難度：考量極端大牌(J/Q/K)解鎖價值、並適時保留「卡對手」的關鍵瓶頸牌
+            if (card.rank === 7) {
+              // 若該花色自己只有 7 沒有別張，扣留 7 卡對手（除非只剩這張能出）
+              if (sameSuit.length === 0) {
+                score -= 25;
+              } else {
+                // 自己手上有該花色的大牌(10~K)或極小牌(A~3)時，積極開 7
+                score += sameSuit.length * 16;
+                for (const c of sameSuit) score += (c.rank > 7 ? c.rank * 2.4 : (14 - c.rank) * 1.1);
+              }
+            } else if (card.rank > 7) {
+              if (higherOwned.length > 0) {
+                // 解鎖高點數牌，避免被迫蓋 J/Q/K
+                score += higherOwned.reduce((acc, c) => acc + c.rank * 3.2, 0);
+              } else {
+                // 後面自己沒牌了：若是 8/9 這種關鍵瓶頸，盡量保留卡死對手；若是 K 則直接出掉無妨
+                score += (card.rank === 13 ? 18 : -(13 - card.rank) * 3.5);
+              }
+            } else {
+              if (lowerOwned.length > 0) {
+                score += lowerOwned.reduce((acc, c) => acc + (14 - c.rank) * 2.0, 0);
+              } else {
+                // 自己下面沒牌，若是 6/5 盡量卡對手，若是 A 直接打掉
+                score += (card.rank === 1 ? 15 : -(card.rank) * 2.5);
+              }
+            }
+            score += Math.random() * 0.4;
+          }
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestCard = card;
+          }
+        }
+        return { action: 'play', card: bestCard };
+      }
+
+      // ===== 2. 無合法牌可出 -> 必須蓋牌 =====
+      if (diff === 'easy') {
+        // 放水新手：常蓋大牌（傾向選點數偏大或隨機）
+        const sortedDesc = [...player.hand].sort((a, b) => b.rank - a.rank);
+        const pickIdx = Math.random() < 0.65 ? 0 : Math.floor(Math.random() * sortedDesc.length);
+        return { action: 'cover', card: sortedDesc[pickIdx] };
+      }
+
+      let bestCover = player.hand[0];
+      let minPenalty = Infinity;
+
+      for (const card of player.hand) {
+        let penalty = getCoverCardPoints(card, game.rules);
+        if (card.rank === 7 && game.rules.cutSevenPenalty) penalty += 70;
+
+        const lane = game.board[card.suit];
+        let dist = lane.low === null
+          ? Math.abs(card.rank - 7)
+          : (card.rank < lane.low ? lane.low - card.rank : card.rank - lane.high);
+
+        // 距離目前桌面越遠越容易卡死，稍微優先蓋掉
+        penalty -= dist * (diff === 'master' ? 1.8 : 1.1);
+
+        // 檢查是否擋到自己手上更外圍的牌
+        const blockedOwn = player.hand.filter(c => {
+          if (c.suit !== card.suit || c.rank === card.rank) return false;
+          if (card.rank > 7) return c.rank > card.rank;
+          if (card.rank < 7) return c.rank < card.rank;
+          return true;
+        });
+
+        if (diff === 'master') {
+          // 大師精算：蓋掉這張會導致自己後面哪些大牌永遠出不去
+          penalty += blockedOwn.reduce((acc, c) => acc + c.rank * 1.4, 0);
+        } else {
+          penalty += blockedOwn.length * 5;
+        }
+
+        penalty += Math.random() * 0.4;
+        if (penalty < minPenalty) {
+          minPenalty = penalty;
+          bestCover = card;
+        }
+      }
+      return { action: 'cover', card: bestCover };
+    }
+
+    function calculateResults(game) {
+      const raw = game.players.map(p => {
+        let baseScore = 0;
+        let cutSevenCount = 0;
+        for (const c of p.covered) {
+          if (c.rank === 7 && game.rules.cutSevenPenalty) cutSevenCount++;
+          baseScore += getCoverCardPoints(c, game.rules);
+        }
+        const isCleanSweep = p.covered.length === 0;
+        return {
+          id: p.id,
+          name: p.name,
+          isAI: p.isAI,
+          covered: sortHand(p.covered),
+          baseScore,
+          finalScore: baseScore,
+          isCleanSweep,
+          cutSevenCount,
+          doubledByCleanSweep: false
+        };
+      });
+
+      const someoneCleanSweep = raw.some(r => r.isCleanSweep);
+      if (someoneCleanSweep && game.rules.cleanSweepDouble) {
+        for (const r of raw) {
+          if (!r.isCleanSweep) {
+            r.finalScore = r.baseScore * 2;
+            r.doubledByCleanSweep = true;
+          }
+        }
+      }
+
+      raw.sort((a, b) => a.finalScore - b.finalScore || a.covered.length - b.covered.length);
+      return raw;
+    }
+
+    // 啟動新局（Host / Single）
+    function startHostGame(isNextRound = false) {
+      clearTimeout(AppState.aiTimer);
+      clearInterval(AppState.turnTickTimer);
+
+      const prevRound = isNextRound && AppState.hostGame ? AppState.hostGame.round : 0;
+      const deck = createDeck();
+      const players = AppState.lobbyPlayers.map(p => ({
+        id: p.id,
+        name: p.name,
+        isAI: p.isAI,
+        peerId: p.peerId || null,
+        connected: p.isAI ? true : p.connected,
+        hand: [],
+        covered: []
+      }));
+
+      deck.forEach((card, idx) => players[idx % players.length].hand.push(card));
+      players.forEach(p => { p.hand = sortHand(p.hand); });
+
+      let startIdx = players.findIndex(p => p.hand.some(c => c.suit === 'S' && c.rank === 7));
+      if (startIdx < 0) startIdx = 0;
+
+      AppState.hostGame = {
+        round: prevRound + 1,
+        rules: { ...AppState.rules },
+        aiDifficulty: AppState.aiDifficulty,
+        board: createEmptyBoard(),
+        players,
+        currentTurnIdx: startIdx,
+        isFirstMove: true,
+        lastPlayedCard: null,
+        lastActionText: `發牌完成！由持有 ♠7 的「${players[startIdx].name}」先攻`,
+        lastSound: null,
+        lastSpeech: '黑桃七起手',
+        turnDeadline: Date.now() + TURN_SECONDS * 1000,
+        status: 'playing',
+        results: null
+      };
+
+      AppState.selectedCoverCardId = null;
+      broadcastGameState();
+      startHostTurnSupervisor();
+    }
+
+    // 執行動作並推進回合（Host 權威驗證）
+    function processPlayerMove(playerId, action, cardObj) {
+      const game = AppState.hostGame;
+      if (!game || game.status !== 'playing') return;
+
+      const currentPlayer = game.players[game.currentTurnIdx];
+      if (!currentPlayer || currentPlayer.id !== playerId) return;
+
+      const cardIdx = currentPlayer.hand.findIndex(c => c.suit === cardObj.suit && c.rank === cardObj.rank);
+      if (cardIdx === -1) return;
+
+      const card = currentPlayer.hand[cardIdx];
+      const legal = getLegalCards(currentPlayer.hand, game.board, game.isFirstMove);
+
+      if (action === 'play') {
+        if (!legal.some(c => c.suit === card.suit && c.rank === card.rank)) return;
+        currentPlayer.hand.splice(cardIdx, 1);
+        const lane = game.board[card.suit];
+        if (card.rank === 7) { lane.low = 7; lane.high = 7; }
+        else if (card.rank < lane.low) lane.low = card.rank;
+        else if (card.rank > lane.high) lane.high = card.rank;
+
+        game.isFirstMove = false;
+        game.lastPlayedCard = { suit: card.suit, rank: card.rank };
+        game.lastActionText = `${currentPlayer.name} 打出 ${cardText(card)}`;
+        game.lastSound = 'play';
+        game.lastSpeech = card.rank === 7 ? `${SUIT_MAP[card.suit].name}七` : null;
+      } else if (action === 'cover') {
+        if (legal.length > 0) return;
+        currentPlayer.hand.splice(cardIdx, 1);
+        currentPlayer.covered.push(card);
+        game.lastActionText = `${currentPlayer.name} 蓋了一張牌`;
+        game.lastSound = 'cover';
+        game.lastSpeech = '蓋牌';
+      } else {
+        return;
+      }
+
+      // 檢查本局是否結束
+      if (game.players.every(p => p.hand.length === 0)) {
+        clearTimeout(AppState.aiTimer);
+        clearInterval(AppState.turnTickTimer);
+        game.status = 'finished';
+        game.results = calculateResults(game);
+        game.lastActionText = `遊戲結束！「${game.results[0].name}」以 ${game.results[0].finalScore} 分奪冠！`;
+        game.lastSound = 'win';
+        game.lastSpeech = `遊戲結束，恭喜${game.results[0].name}獲勝`;
+        broadcastGameState();
+        return;
+      }
+
+      // 順時針換下一位有手牌的玩家
+      let nextIdx = (game.currentTurnIdx + 1) % game.players.length;
+      let guard = 0;
+      while (game.players[nextIdx].hand.length === 0 && guard < game.players.length) {
+        nextIdx = (nextIdx + 1) % game.players.length;
+        guard++;
+      }
+      game.currentTurnIdx = nextIdx;
+      game.turnDeadline = Date.now() + TURN_SECONDS * 1000;
+
+      broadcastGameState();
+      startHostTurnSupervisor();
+    }
+
+    // 房主端管理 AI 思考與真人逾時自動代打（防卡局）
+    function startHostTurnSupervisor() {
+      clearTimeout(AppState.aiTimer);
+      const game = AppState.hostGame;
+      if (!game || game.status !== 'playing') return;
+
+      const curr = game.players[game.currentTurnIdx];
+      if (!curr) return;
+
+      if (curr.isAI) {
+        AppState.aiTimer = setTimeout(() => {
+          if (!AppState.hostGame || AppState.hostGame.status !== 'playing') return;
+          const active = AppState.hostGame.players[AppState.hostGame.currentTurnIdx];
+          if (!active || active.id !== curr.id || !active.isAI) return;
+          const decision = chooseAIMove(active, AppState.hostGame);
+          processPlayerMove(active.id, decision.action, decision.card);
+        }, 680);
+      } else {
+        // 真人玩家逾時 25 秒自動由 AI 幫出/蓋牌，防止掛機卡死
+        AppState.aiTimer = setTimeout(() => {
+          if (!AppState.hostGame || AppState.hostGame.status !== 'playing') return;
+          const active = AppState.hostGame.players[AppState.hostGame.currentTurnIdx];
+          if (!active || active.id !== curr.id) return;
+          const decision = chooseAIMove(active, AppState.hostGame);
+          processPlayerMove(active.id, decision.action, decision.card);
+        }, TURN_SECONDS * 1000 + 400);
+      }
+    }
+
+    function buildSanitizedStateFor(targetPlayerId) {
+      const game = AppState.hostGame;
+      const target = game.players.find(p => p.id === targetPlayerId);
+      return {
+        round: game.round,
+        roomCode: AppState.roomCode,
+        mode: AppState.mode,
+        aiDifficulty: game.aiDifficulty,
+        rules: game.rules,
+        board: JSON.parse(JSON.stringify(game.board)),
+        currentTurnId: game.players[game.currentTurnIdx]?.id || null,
+        turnDeadline: game.turnDeadline,
+        isFirstMove: game.isFirstMove,
+        lastPlayedCard: game.lastPlayedCard,
+        lastActionText: game.lastActionText,
+        lastSound: game.lastSound,
+        lastSpeech: game.lastSpeech,
+        status: game.status,
+        results: game.results,
+        myId: targetPlayerId,
+        myHand: target ? sortHand(target.hand) : [],
+        myCovered: target ? sortHand(target.covered) : [],
+        players: game.players.map(p => ({
+          id: p.id,
+          name: p.name,
+          isAI: p.isAI,
+          connected: p.connected,
+          handCount: p.hand.length,
+          coveredCount: p.covered.length
+        }))
+      };
+    }
+
+    function broadcastGameState() {
+      if (!AppState.hostGame) return;
+      applyIncomingGameState(buildSanitizedStateFor(AppState.myPlayerId));
+
+      if (AppState.mode === 'host' && !AppState.sandboxDegraded) {
+        for (const p of AppState.hostGame.players) {
+          if (!p.isAI && p.peerId && AppState.hostConnections.has(p.peerId)) {
+            const conn = AppState.hostConnections.get(p.peerId);
+            if (conn && conn.open) {
+              try { conn.send({ type: 'GAME_STATE', payload: buildSanitizedStateFor(p.id) }); } catch (e) {}
+            }
+          }
+        }
+      }
+    }
+
+    function broadcastLobbyState() {
+      if (AppState.mode !== 'host') return;
+      const payload = {
+        roomCode: AppState.roomCode,
+        maxPlayers: AppState.hostMaxPlayers,
+        rules: AppState.rules,
+        players: AppState.lobbyPlayers.map(p => ({ id: p.id, name: p.name, isAI: p.isAI }))
+      };
+      for (const conn of AppState.hostConnections.values()) {
+        if (conn && conn.open) {
+          try { conn.send({ type: 'LOBBY_UPDATE', payload }); } catch (e) {}
+        }
+      }
+      renderHostLobbyList();
+    }
+
+    // -------------------- PeerJS 多人連線 + 沙盒環境無縫降級 --------------------
+    function cleanupNetwork() {
+      clearTimeout(AppState.aiTimer);
+      clearInterval(AppState.turnTickTimer);
+      try {
+        for (const conn of AppState.hostConnections.values()) {
+          try { conn.close(); } catch (e) {}
+        }
+        AppState.hostConnections.clear();
+        if (AppState.clientConn) {
+          try { AppState.clientConn.close(); } catch (e) {}
+          AppState.clientConn = null;
+        }
+        if (AppState.peer) {
+          try { AppState.peer.destroy(); } catch (e) {}
+          AppState.peer = null;
+        }
+      } catch (e) {}
+    }
+
+    function degradeHostToLocalSandbox(reasonMsg) {
+      if (AppState.sandboxDegraded) return;
+      AppState.sandboxDegraded = true;
+      setConnIndicator('host-conn-dot', 'connected');
+      document.getElementById('host-sandbox-badge').classList.remove('hidden');
+      renderQRCode('host-qrcode', AppState.roomCode);
+      document.getElementById('host-qr-hint').textContent = '目前處於受限沙盒環境，已無縫啟用本機 AI 模式';
+      showToast(reasonMsg || '網路／沙盒受限，已無縫降級為本機 AI 模式，可直接補滿 AI 開玩！', 'gold');
+    }
+
+    function createHostRoom() {
+      cleanupNetwork();
+      AppState.sandboxDegraded = false;
+      const nickname = getNickname();
+      AppState.mode = 'host';
+      AppState.roomCode = generateRoomCode();
+      AppState.myPlayerId = 'host';
+      AppState.rules = {
+        cleanSweepDouble: document.getElementById('opt-host-clean-double').checked,
+        cutSevenPenalty: document.getElementById('opt-host-cut-seven').checked
+      };
+      AppState.lobbyPlayers = [{ id: 'host', name: nickname, isAI: false, peerId: null, connected: true }];
+
+      document.getElementById('host-setup-box').classList.add('hidden');
+      document.getElementById('host-waiting-box').classList.remove('hidden');
+      document.getElementById('host-sandbox-badge').classList.add('hidden');
+      document.getElementById('host-room-code-display').textContent = AppState.roomCode;
+      setConnIndicator('host-conn-dot', 'connecting');
+      renderHostLobbyList();
+
+      if (typeof Peer === 'undefined') {
+        degradeHostToLocalSandbox('PeerJS 未載入，已自動降級為本機 AI 房間');
+        return;
+      }
+
+      let opened = false;
+      const fallbackTimer = setTimeout(() => {
+        if (!opened) degradeHostToLocalSandbox('連線伺服器回應逾時（沙盒受限），已自動切換為本機 AI 模式');
+      }, 5500);
+
+      try {
+        const peer = new Peer(PEER_PREFIX + AppState.roomCode, { debug: 0 });
+        AppState.peer = peer;
+
+        peer.on('open', () => {
+          opened = true;
+          clearTimeout(fallbackTimer);
+          setConnIndicator('host-conn-dot', 'connected');
+          showToast(`🏠 房間 ${AppState.roomCode} 已就緒！`, 'gold');
+          renderQRCode('host-qrcode', AppState.roomCode);
+          document.getElementById('host-qr-hint').textContent = getInviteUrl(AppState.roomCode);
+        });
+
+        peer.on('connection', conn => {
+          conn.on('open', () => AppState.hostConnections.set(conn.peer, conn));
+          conn.on('data', msg => handleHostReceiveData(conn, msg));
+          conn.on('close', () => handleClientDisconnected(conn.peer));
+          conn.on('error', () => handleClientDisconnected(conn.peer));
+        });
+
+        peer.on('error', err => {
+          clearTimeout(fallbackTimer);
+          if (!opened) {
+            degradeHostToLocalSandbox('偵測到 WebSocket 受限，已自動無縫降級為本機 AI 房間');
+          } else if (err.type === 'unavailable-id') {
+            createHostRoom();
+          }
+        });
+      } catch (e) {
+        clearTimeout(fallbackTimer);
+        degradeHostToLocalSandbox('沙盒環境限制連線，已無縫切換為本機 AI 模式');
+      }
+    }
+
+    function handleHostReceiveData(conn, msg) {
+      if (!msg || !msg.type) return;
+      if (msg.type === 'JOIN_REQUEST') {
+        if (AppState.hostGame && AppState.hostGame.status === 'playing') {
+          conn.send({ type: 'JOIN_REJECTED', reason: '該房間遊戲已經開始囉！' });
+          setTimeout(() => conn.close(), 300);
+          return;
+        }
+        if (AppState.lobbyPlayers.length >= AppState.hostMaxPlayers) {
+          conn.send({ type: 'JOIN_REJECTED', reason: '房間人數已滿！' });
+          setTimeout(() => conn.close(), 300);
+          return;
+        }
+        const cleanName = (msg.name || '玩家').trim().slice(0, 12) || '神秘玩家';
+        const playerId = 'p-' + Math.random().toString(36).slice(2, 8);
+        AppState.lobbyPlayers.push({ id: playerId, name: cleanName, isAI: false, peerId: conn.peer, connected: true });
+        conn.send({ type: 'JOIN_ACCEPTED', playerId, roomCode: AppState.roomCode });
+        AudioMediaEngine.click();
+        showToast(`👋 ${cleanName} 加入了房間`, 'gold');
+        broadcastLobbyState();
+      } else if (msg.type === 'PLAYER_MOVE') {
+        const player = AppState.hostGame?.players.find(p => p.peerId === conn.peer);
+        if (player) processPlayerMove(player.id, msg.action, msg.card);
+      }
+    }
+
+    function handleClientDisconnected(peerId) {
+      AppState.hostConnections.delete(peerId);
+      if (!AppState.hostGame || document.getElementById('view-game').classList.contains('hidden')) {
+        const idx = AppState.lobbyPlayers.findIndex(p => p.peerId === peerId);
+        if (idx !== -1) {
+          const leftName = AppState.lobbyPlayers[idx].name;
+          AppState.lobbyPlayers.splice(idx, 1);
+          showToast(`${leftName} 離開了房間`, 'warn');
+          broadcastLobbyState();
+        }
+        return;
+      }
+
+      const p = AppState.hostGame.players.find(pl => pl.peerId === peerId);
+      if (p && !p.isAI) {
+        p.isAI = true;
+        p.connected = false;
+        if (!p.name.includes('(AI代打)')) p.name = `${p.name}(AI代打)`;
+        AppState.hostGame.lastActionText = `⚠️ ${p.name} 斷線，已由 AI 自動代打`;
+        showToast(`${p.name} 斷線，已由 AI 接手`, 'warn');
+        broadcastGameState();
+        startHostTurnSupervisor();
+      }
+    }
+
+    function joinRoomAsClient(codeInput) {
+      const code = (codeInput || '').trim().toUpperCase();
+      if (code.length < 4) {
+        showToast('請輸入正確的 4 碼房間代碼', 'warn');
+        return;
+      }
+
+      if (typeof Peer === 'undefined') {
+        showToast('偵測到沙盒受限，已自動為您開啟單機 AI 對戰', 'gold');
+        launchSinglePlayerGame();
+        return;
+      }
+
+      cleanupNetwork();
+      const nickname = getNickname();
+      AppState.mode = 'client';
+      AppState.roomCode = code;
+
+      document.getElementById('join-form-box').classList.add('hidden');
+      document.getElementById('client-waiting-box').classList.remove('hidden');
+      document.getElementById('client-room-info').textContent = `房號：${code}`;
+      document.getElementById('client-conn-status').textContent = '正在連線至房主...';
+      setConnIndicator('client-conn-dot', 'connecting');
+
+      let connected = false;
+      const fallbackTimer = setTimeout(() => {
+        if (!connected) {
+          showDialog({
+            title: '連線逾時或沙盒受限',
+            message: `無法連線至房號「${code}」。是否直接為您切換為單機 AI 對戰模式？`,
+            showCancel: true,
+            confirmText: '改玩單機 AI',
+            onConfirm: () => {
+              resetToLobby();
+              launchSinglePlayerGame();
+            }
+          });
+        }
+      }, 6500);
+
+      try {
+        const peer = new Peer(undefined, { debug: 0 });
+        AppState.peer = peer;
+
+        peer.on('open', () => {
+          const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
+          AppState.clientConn = conn;
+
+          conn.on('open', () => {
+            connected = true;
+            clearTimeout(fallbackTimer);
+            setConnIndicator('client-conn-dot', 'connected');
+            document.getElementById('client-conn-status').textContent = '已連線！等待房主開始';
+            conn.send({ type: 'JOIN_REQUEST', name: nickname });
+          });
+
+          conn.on('data', msg => handleClientReceiveData(msg));
+          conn.on('close', () => {
+            setConnIndicator('client-conn-dot', 'error');
+            setConnIndicator('game-conn-dot', 'error');
+            showToast('⚠️ 與房主的連線已中斷', 'error');
+          });
+          conn.on('error', () => {
+            clearTimeout(fallbackTimer);
+            setConnIndicator('client-conn-dot', 'error');
+          });
+        });
+
+        peer.on('error', () => {
+          clearTimeout(fallbackTimer);
+          setConnIndicator('client-conn-dot', 'error');
+          document.getElementById('client-conn-status').textContent = '連線受限，請改用單機模式';
+        });
+      } catch (e) {
+        clearTimeout(fallbackTimer);
+        showToast('沙盒環境受限，已自動切換為單機 AI 模式', 'gold');
+        launchSinglePlayerGame();
+      }
+    }
+
+    function handleClientReceiveData(msg) {
+      if (!msg || !msg.type) return;
+      if (msg.type === 'JOIN_ACCEPTED') {
+        AppState.myPlayerId = msg.playerId;
+        showToast(`✅ 已加入房間 ${msg.roomCode}`, 'gold');
+      } else if (msg.type === 'JOIN_REJECTED') {
+        showDialog({
+          title: '無法加入房間',
+          message: msg.reason || '房間目前無法加入',
+          onConfirm: () => resetToLobby()
+        });
+      } else if (msg.type === 'LOBBY_UPDATE') {
+        const { players, maxPlayers } = msg.payload;
+        document.getElementById('client-player-ratio').textContent = `${players.length} / ${maxPlayers}`;
+        document.getElementById('client-player-list').innerHTML = players.map(p => `
+          <li class="flex items-center justify-between px-3 py-1.5 rounded-lg bg-black/35 border border-white/10 text-xs">
+            <span class="font-bold text-white">${escapeHtml(p.name)} ${p.id === AppState.myPlayerId ? '<span class="text-amber-300">(你)</span>' : ''}</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full ${p.isAI ? 'bg-sky-500/20 text-sky-300' : 'bg-emerald-500/20 text-emerald-300'}">${p.isAI ? '🤖 AI' : '👤 真人'}</span>
+          </li>
+        `).join('');
+      } else if (msg.type === 'GAME_STATE') {
+        applyIncomingGameState(msg.payload);
+      }
+    }
+
+    function submitMyMove(action, card) {
+      AppState.selectedCoverCardId = null;
+      if (AppState.mode === 'client') {
+        if (AppState.clientConn && AppState.clientConn.open) {
+          AppState.clientConn.send({ type: 'PLAYER_MOVE', action, card });
+        } else {
+          showToast('連線已中斷，無法操作', 'error');
+        }
+      } else {
+        processPlayerMove(AppState.myPlayerId, action, card);
+      }
+    }
+
+    // -------------------- 視圖渲染引擎 --------------------
+    function setConnIndicator(elId, state) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      el.classList.remove('bg-amber-400', 'bg-emerald-400', 'bg-red-500', 'animate-pulse');
+      if (state === 'connecting') el.classList.add('bg-amber-400', 'animate-pulse');
+      else if (state === 'connected') el.classList.add('bg-emerald-400');
+      else el.classList.add('bg-red-500');
+    }
+
+    function renderQRCode(containerId, roomCode) {
+      const box = document.getElementById(containerId);
+      box.innerHTML = '';
+      try {
+        new QRCode(box, {
+          text: getInviteUrl(roomCode),
+          width: 144,
+          height: 144,
+          colorDark: '#06241b',
+          colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      } catch (e) {
+        box.innerHTML = `<div class="text-xs text-stone-800 font-bold p-3">房號：${roomCode}</div>`;
+      }
+    }
+
+    function renderHostLobbyList() {
+      const listEl = document.getElementById('host-player-list');
+      const maxP = AppState.hostMaxPlayers;
+      const curP = AppState.lobbyPlayers.length;
+      document.getElementById('host-player-ratio').textContent = `${curP} / ${maxP}`;
+
+      listEl.innerHTML = AppState.lobbyPlayers.map((p, idx) => `
+        <li class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-black/35 border border-white/10 text-xs">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span class="font-bold text-white truncate">${escapeHtml(p.name)}</span>
+            ${idx === 0 ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-400/25 text-amber-300 font-bold">房主</span>' : ''}
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <span class="text-[10px] px-2 py-0.5 rounded-full ${p.isAI ? 'bg-sky-500/20 text-sky-300' : 'bg-emerald-500/20 text-emerald-300'}">${p.isAI ? '🤖 AI' : '👤 真人'}</span>
+            ${p.isAI ? `<button data-remove-ai="${p.id}" class="text-red-300 hover:text-red-100 text-xs px-1 font-bold">✕</button>` : ''}
+          </div>
+        </li>
+      `).join('');
+
+      listEl.querySelectorAll('[data-remove-ai]').forEach(btn => {
+        btn.onclick = () => {
+          const id = btn.getAttribute('data-remove-ai');
+          AppState.lobbyPlayers = AppState.lobbyPlayers.filter(p => p.id !== id);
+          broadcastLobbyState();
+        };
+      });
+
+      document.getElementById('btn-fill-ai').disabled = curP >= maxP;
+      const btnStart = document.getElementById('btn-host-start-game');
+      btnStart.disabled = curP < 3;
+      btnStart.textContent = curP < 3 ? `需滿 3 人 (${curP}/3)` : `🃏 開始 (${curP}人)`;
+    }
+
+    // 倒數計時器更新（固定寬高、不造成跳動）
+    function updateTurnTimerLoop(deadline, status) {
+      clearInterval(AppState.turnTickTimer);
+      const valEl = document.getElementById('turn-timer-val');
+      const boxEl = document.getElementById('turn-timer-box');
+
+      if (status !== 'playing' || !deadline) {
+        valEl.textContent = '--';
+        boxEl.classList.remove('border-red-400', 'text-red-300', 'animate-pulse');
+        return;
+      }
+
+      const tick = () => {
+        const sec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        valEl.textContent = String(sec).padStart(2, '0');
+        if (sec <= 5) {
+          boxEl.classList.add('border-red-400', 'text-red-300', 'animate-pulse');
+        } else {
+          boxEl.classList.remove('border-red-400', 'text-red-300', 'animate-pulse');
+        }
+      };
+      tick();
+      AppState.turnTickTimer = setInterval(tick, 500);
+    }
+
+    function applyIncomingGameState(state) {
+      const prevTurnId = AppState.viewState?.currentTurnId;
+      const prevAction = AppState.viewState?.lastActionText;
+      AppState.viewState = state;
+
+      document.getElementById('view-lobby').classList.add('hidden');
+      document.getElementById('view-game').classList.remove('hidden');
+
+      // 音效與語音播報
+      if (state.lastActionText && state.lastActionText !== prevAction) {
+        showToast(state.lastActionText, state.lastSound === 'cover' ? 'warn' : state.lastSound === 'win' ? 'gold' : 'info');
+        if (state.lastSound === 'play') AudioMediaEngine.playCard();
+        else if (state.lastSound === 'cover') AudioMediaEngine.coverCard();
+        else if (state.lastSound === 'win') AudioMediaEngine.win();
+
+        if (state.lastSpeech) AudioMediaEngine.speak(state.lastSpeech);
+      }
+
+      const isNowMyTurn = state.status === 'playing' && state.currentTurnId === state.myId;
+      if (isNowMyTurn && prevTurnId !== state.myId) {
+        setTimeout(() => {
+          AudioMediaEngine.myTurn();
+          const legal = getLegalCards(state.myHand, state.board, state.isFirstMove);
+          if (state.isFirstMove) AudioMediaEngine.speak('輪到你，請先出黑桃七');
+          else if (legal.length === 0) AudioMediaEngine.speak('無牌可出，請蓋牌');
+          else AudioMediaEngine.speak('輪到你出牌');
+        }, 180);
+      }
+
+      // 頂部列
+      document.getElementById('game-round-badge').textContent = `第 ${state.round} 局`;
+      const diffName = { easy: '新手AI', normal: '普通AI', master: '大師AI' }[state.aiDifficulty] || 'AI';
+      const roomTextEl = document.getElementById('game-room-text');
+      const qrBtn = document.getElementById('btn-ingame-qr');
+
+      if (state.mode === 'single' || AppState.sandboxDegraded) {
+        roomTextEl.textContent = `單機 (${diffName})`;
+        setConnIndicator('game-conn-dot', 'connected');
+        qrBtn.classList.add('hidden');
+      } else {
+        roomTextEl.textContent = `房號 ${state.roomCode}`;
+        setConnIndicator('game-conn-dot', 'connected');
+        qrBtn.classList.toggle('hidden', state.mode !== 'host');
+      }
+
+      const rulesTag = [];
+      if (state.rules.cleanSweepDouble) rulesTag.push('脫手×2');
+      if (state.rules.cutSevenPenalty) rulesTag.push('蓋7罰20');
+      document.getElementById('active-rules-tag').textContent = rulesTag.join('・');
+
+      updateTurnTimerLoop(state.turnDeadline, state.status);
+      renderOpponents(state);
+      renderBoard(state);
+      renderMyHandAndStatus(state);
+
+      if (state.status === 'finished' && state.results) {
+        renderResultsModal(state);
+      } else {
+        document.getElementById('modal-results').classList.add('hidden');
+      }
+    }
+
+    function renderOpponents(state) {
+      const container = document.getElementById('opponents-bar');
+      const myIdx = state.players.findIndex(p => p.id === state.myId);
+      const ordered = [];
+      for (let i = 1; i < state.players.length; i++) {
+        ordered.push(state.players[(myIdx + i) % state.players.length]);
+      }
+
+      container.innerHTML = ordered.map(p => {
+        const isTurn = state.status === 'playing' && p.id === state.currentTurnId;
+        return `
+          <div class="opponent-chip px-2.5 py-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-black/40 border border-emerald-400/25 flex flex-col sm:min-w-[130px] transition ${isTurn ? 'active-turn-glow' : ''}">
+            <div class="flex items-center justify-between gap-1">
+              <span class="text-[11px] sm:text-xs font-black text-white truncate">${escapeHtml(p.name)}</span>
+              <span class="text-[10px] shrink-0">${p.isAI ? '🤖' : '👤'}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 text-[10px] sm:text-[11px] text-emerald-200/85">
+              <span>🃏 <strong>${p.handCount}</strong></span>
+              <span class="${p.coveredCount > 0 ? 'text-orange-300 font-bold' : 'text-emerald-300/70'}">🂠 ${p.coveredCount}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderBoard(state) {
+      const boardEl = document.getElementById('solitaire-board');
+      boardEl.innerHTML = SUITS.map(suit => {
+        const lane = state.board[suit.id];
+        let slotsHtml = `
+          <div class="flex items-center justify-center text-base sm:text-2xl font-black rounded-lg bg-black/30 h-full ${suit.colorClass === 'suit-red' ? 'text-red-500' : 'text-slate-100'}">
+            ${suit.symbol}
+          </div>
+        `;
+        for (let r = 1; r <= 13; r++) {
+          const isFilled = lane.low !== null && r >= lane.low && r <= lane.high;
+          const isLast = state.lastPlayedCard && state.lastPlayedCard.suit === suit.id && state.lastPlayedCard.rank === r;
+          if (isFilled) {
+            slotsHtml += `
+              <div class="board-slot filled ${suit.colorClass} ${isLast ? 'last-played' : ''}">
+                <span class="text-[10px] sm:text-sm leading-none">${RANK_LABELS[r]}</span>
+                <span class="text-[8px] sm:text-xs leading-none mt-0.5">${suit.symbol}</span>
+              </div>
+            `;
+          } else {
+            slotsHtml += `
+              <div class="board-slot empty ${r === 7 ? 'is-seven' : ''}">
+                <span class="text-[9px] sm:text-xs">${RANK_LABELS[r]}</span>
+              </div>
+            `;
+          }
+        }
+        return `<div class="board-row-grid">${slotsHtml}</div>`;
+      }).join('');
+    }
+
+    function renderMyHandAndStatus(state) {
+      const me = state.players.find(p => p.id === state.myId);
+      const currPlayer = state.players.find(p => p.id === state.currentTurnId);
+      const isMyTurn = state.status === 'playing' && state.currentTurnId === state.myId;
+      const legalCards = isMyTurn ? getLegalCards(state.myHand, state.board, state.isFirstMove) : [];
+      const legalSet = new Set(legalCards.map(cardId));
+      const isCoverMode = isMyTurn && legalCards.length === 0 && state.myHand.length > 0;
+
+      // 更新個人資訊列
+      document.getElementById('my-name-display').textContent = me ? me.name : '我';
+      document.getElementById('my-hand-count').textContent = `剩 ${state.myHand.length} 張`;
+      const myCoveredPts = state.myCovered.reduce((sum, c) => sum + getCoverCardPoints(c, state.rules), 0);
+      document.getElementById('my-covered-info').textContent = `已蓋：${state.myCovered.length} 張 (${myCoveredPts} 分)`;
+
+      // 回合光暈與指示燈（嚴格使用 animate-pulse）
+      const myArea = document.getElementById('my-area');
+      const indicator = document.getElementById('my-turn-indicator');
+      if (isMyTurn) {
+        myArea.classList.add('active-turn-glow');
+        indicator.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0';
+      } else {
+        myArea.classList.remove('active-turn-glow');
+        indicator.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500/40 shrink-0';
+      }
+
+      // 固定高度中央狀態列（防跳動）
+      const statusBar = document.getElementById('stage-status-bar');
+      const statusText = document.getElementById('turn-status-text');
+      const statusDot = document.getElementById('stage-status-dot');
+      const btnConfirmCover = document.getElementById('btn-confirm-cover');
+
+      statusBar.classList.remove('bg-orange-600/85', 'border-orange-300', 'bg-black/40', 'border-emerald-400/25');
+
+      if (state.status === 'finished') {
+        statusBar.classList.add('bg-black/40', 'border-emerald-400/25');
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0';
+        statusText.textContent = '🏁 本局已結束，正在查看戰績';
+        btnConfirmCover.classList.add('hidden');
+      } else if (isCoverMode) {
+        statusBar.classList.add('bg-orange-600/85', 'border-orange-300');
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-white animate-pulse shrink-0';
+        const picked = AppState.selectedCoverCardId ? state.myHand.find(c => cardId(c) === AppState.selectedCoverCardId) : null;
+        if (picked) {
+          const pts = getCoverCardPoints(picked, state.rules);
+          statusText.textContent = `蓋牌確認：${cardText(picked)} (${pts}分)，再點或按右側確認`;
+          btnConfirmCover.classList.remove('hidden');
+          btnConfirmCover.onclick = () => submitMyMove('cover', picked);
+        } else {
+          AppState.selectedCoverCardId = null;
+          statusText.textContent = '⚠️ 無牌可出，請選擇一張手牌蓋牌';
+          btnConfirmCover.classList.add('hidden');
+        }
+      } else if (isMyTurn) {
+        statusBar.classList.add('bg-black/40', 'border-emerald-400/25');
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0';
+        statusText.textContent = state.isFirstMove ? '✨ 輪到你！請先打出 ♠7' : '✨ 輪到你的回合！請點選高亮手牌';
+        btnConfirmCover.classList.add('hidden');
+        AppState.selectedCoverCardId = null;
+      } else {
+        statusBar.classList.add('bg-black/40', 'border-emerald-400/25');
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0';
+        statusText.textContent = `⏳ 等待「${currPlayer ? currPlayer.name : ''}」思考中...`;
+        btnConfirmCover.classList.add('hidden');
+        AppState.selectedCoverCardId = null;
+      }
+
+      // 渲染手牌
+      const handEl = document.getElementById('my-hand-container');
+      if (state.myHand.length === 0) {
+        handEl.innerHTML = `<div class="text-xs sm:text-sm text-emerald-200/75 py-4 font-bold">🎉 你的手牌已全部出完／蓋完！</div>`;
+        return;
+      }
+
+      handEl.innerHTML = '';
+      for (const card of state.myHand) {
+        const cid = cardId(card);
+        const suitInfo = SUIT_MAP[card.suit];
+        const canPlay = isMyTurn && legalSet.has(cid);
+
+        const el = document.createElement('button');
+        el.type = 'button';
+        let stateClass = '';
+        if (!isMyTurn) stateClass = 'opacity-90 cursor-default';
+        else if (isCoverMode) stateClass = AppState.selectedCoverCardId === cid ? 'selected-cover' : 'cover-selectable';
+        else stateClass = canPlay ? 'playable' : 'disabled';
+
+        el.className = `hand-card ${suitInfo.colorClass} ${stateClass}`;
+        el.innerHTML = `
+          <div class="flex flex-col items-start leading-none">
+            <span class="text-xs sm:text-base font-black">${RANK_LABELS[card.rank]}</span>
+            <span class="text-[10px] sm:text-sm">${suitInfo.symbol}</span>
+          </div>
+          <div class="text-lg sm:text-3xl self-center leading-none">${suitInfo.symbol}</div>
+          <div class="flex flex-col items-end leading-none rotate-180">
+            <span class="text-[10px] sm:text-xs font-black">${RANK_LABELS[card.rank]}</span>
+          </div>
+        `;
+
+        el.onclick = () => {
+          if (!isMyTurn) return;
+          if (isCoverMode) {
+            if (AppState.selectedCoverCardId === cid) {
+              submitMyMove('cover', card);
+            } else {
+              AudioMediaEngine.click();
+              AppState.selectedCoverCardId = cid;
+              renderMyHandAndStatus(AppState.viewState);
+            }
+          } else if (canPlay) {
+            submitMyMove('play', card);
+          }
+        };
+        handEl.appendChild(el);
+      }
+    }
+
+    function renderResultsModal(state) {
+      const modal = document.getElementById('modal-results');
+      document.getElementById('results-round-label').textContent = `第 ${state.round} 局`;
+      const winner = state.results[0];
+      document.getElementById('results-subtitle').textContent = `冠軍：${winner.name}（${winner.finalScore} 分）`;
+
+      const medals = ['🥇', '🥈', '🥉'];
+      document.getElementById('results-table-wrap').innerHTML = state.results.map((r, idx) => {
+        const cardsHtml = r.covered.length === 0
+          ? `<span class="text-xs text-emerald-300 font-bold">✨ 完美脫手，一張未蓋！</span>`
+          : r.covered.map(c => {
+              const s = SUIT_MAP[c.suit];
+              const isPen = c.rank === 7 && state.rules.cutSevenPenalty;
+              return `<span class="mini-card ${s.colorClass} ${isPen ? 'penalty-seven' : ''}">${s.symbol}${RANK_LABELS[c.rank]}${isPen ? '(20)' : ''}</span>`;
+            }).join('');
+
+        return `
+          <div class="p-3 rounded-xl bg-black/40 border ${idx === 0 ? 'border-amber-400/75 bg-amber-400/10' : 'border-white/10'} flex flex-col gap-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0 flex-wrap">
+                <span class="text-base sm:text-lg font-black w-6 text-center shrink-0">${medals[idx] || `#${idx + 1}`}</span>
+                <span class="font-black text-sm sm:text-base text-white truncate">${escapeHtml(r.name)}</span>
+                ${r.isCleanSweep ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/50 text-emerald-200 text-[10px] font-bold">脫手 0分</span>' : ''}
+                ${r.doubledByCleanSweep ? '<span class="px-2 py-0.5 rounded-full bg-red-500/25 border border-red-400/50 text-red-200 text-[10px] font-bold">脫手加倍 ×2</span>' : ''}
+                ${r.cutSevenCount > 0 ? '<span class="px-2 py-0.5 rounded-full bg-orange-500/25 border border-orange-400/50 text-orange-200 text-[10px] font-bold">斬龍罰分</span>' : ''}
+              </div>
+              <div class="text-right shrink-0">
+                <span class="text-lg sm:text-xl font-black ${idx === 0 ? 'text-amber-300' : 'text-white'}">${r.finalScore}</span>
+                <span class="text-xs text-emerald-200/75 ml-0.5">分</span>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5 pl-8">${cardsHtml}</div>
+          </div>
+        `;
+      }).join('');
+
+      const btnAgain = document.getElementById('btn-play-again');
+      const waitHint = document.getElementById('client-wait-next-hint');
+      if (AppState.mode === 'client') {
+        btnAgain.classList.add('hidden');
+        waitHint.classList.remove('hidden');
+      } else {
+        btnAgain.classList.remove('hidden');
+        waitHint.classList.add('hidden');
+      }
+      modal.classList.remove('hidden');
+    }
+
+    // -------------------- 頁面控制與事件綁定 --------------------
+    function getNickname() {
+      const val = document.getElementById('input-nickname').value.trim();
+      if (val) return val;
+      const fallback = RANDOM_NICKNAMES[Math.floor(Math.random() * RANDOM_NICKNAMES.length)];
+      document.getElementById('input-nickname').value = fallback;
+      return fallback;
+    }
+
+    function launchSinglePlayerGame() {
+      cleanupNetwork();
+      AppState.sandboxDegraded = false;
+      const nickname = getNickname();
+      AppState.mode = 'single';
+      AppState.myPlayerId = 'local-human';
+      AppState.rules = {
+        cleanSweepDouble: document.getElementById('opt-single-clean-double').checked,
+        cutSevenPenalty: document.getElementById('opt-single-cut-seven').checked
+      };
+      AppState.lobbyPlayers = [{ id: 'local-human', name: nickname, isAI: false, connected: true }];
+      const shuffledAI = [...AI_NAMES].sort(() => Math.random() - 0.5);
+      for (let i = 1; i < AppState.singlePlayerCount; i++) {
+        AppState.lobbyPlayers.push({
+          id: `ai-${i}`,
+          name: shuffledAI[i - 1] || `AI 玩家${i}`,
+          isAI: true,
+          connected: true
+        });
+      }
+      startHostGame(false);
+    }
+
+    function switchLobbyTab(tabName) {
+      document.querySelectorAll('.lobby-tab').forEach(btn => {
+        const active = btn.dataset.tab === tabName;
+        btn.className = active
+          ? 'lobby-tab py-2 px-2 rounded-lg text-xs sm:text-sm font-bold transition bg-amber-400 text-stone-900 shadow'
+          : 'lobby-tab py-2 px-2 rounded-lg text-xs sm:text-sm font-bold transition text-emerald-100 hover:bg-white/10';
+      });
+      document.getElementById('panel-single').classList.toggle('hidden', tabName !== 'single');
+      document.getElementById('panel-host').classList.toggle('hidden', tabName !== 'host');
+      document.getElementById('panel-join').classList.toggle('hidden', tabName !== 'join');
+    }
+
+    function resetToLobby() {
+      cleanupNetwork();
+      AppState.hostGame = null;
+      AppState.viewState = null;
+      AppState.roomCode = '';
+      AppState.lobbyPlayers = [];
+      AppState.selectedCoverCardId = null;
+      AppState.sandboxDegraded = false;
+
+      document.getElementById('modal-results').classList.add('hidden');
+      document.getElementById('view-game').classList.add('hidden');
+      document.getElementById('view-lobby').classList.remove('hidden');
+
+      document.getElementById('host-setup-box').classList.remove('hidden');
+      document.getElementById('host-waiting-box').classList.add('hidden');
+      document.getElementById('join-form-box').classList.remove('hidden');
+      document.getElementById('client-waiting-box').classList.add('hidden');
+    }
+
+    function syncDiffButtons(diff) {
+      AppState.aiDifficulty = diff;
+      ['.diff-btn', '.host-diff-btn'].forEach(sel => {
+        document.querySelectorAll(sel).forEach(b => {
+          const on = b.dataset.diff === diff;
+          b.className = `${sel.slice(1)} py-1.5 rounded-lg text-xs font-bold ${on ? 'bg-amber-400 text-stone-900 border border-amber-300' : 'bg-black/40 border border-emerald-400/30 text-emerald-100'}`;
+        });
+      });
+    }
+
+    function bindEvents() {
+      // 全螢幕切換
+      document.getElementById('btn-lobby-fullscreen').onclick = toggleFullscreen;
+      document.getElementById('btn-game-fullscreen').onclick = toggleFullscreen;
+
+      // 隨機暱稱
+      document.getElementById('btn-random-name').onclick = () => {
+        AudioMediaEngine.click();
+        document.getElementById('input-nickname').value =
+          RANDOM_NICKNAMES[Math.floor(Math.random() * RANDOM_NICKNAMES.length)] + Math.floor(10 + Math.random() * 89);
+      };
+
+      // 大廳分頁
+      document.querySelectorAll('.lobby-tab').forEach(btn => {
+        btn.onclick = () => { AudioMediaEngine.click(); switchLobbyTab(btn.dataset.tab); };
+      });
+
+      // 單機人數
+      document.querySelectorAll('.count-btn').forEach(btn => {
+        btn.onclick = () => {
+          AudioMediaEngine.click();
+          AppState.singlePlayerCount = Number(btn.dataset.count);
+          document.querySelectorAll('.count-btn').forEach(b => {
+            const on = b === btn;
+            b.className = `count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold ${on ? 'bg-amber-400 text-stone-900 border border-amber-300' : 'bg-black/40 border border-emerald-400/30 text-emerald-100'}`;
+          });
+        };
+      });
+
+      // 連線房人數上限
+      document.querySelectorAll('.host-count-btn').forEach(btn => {
+        btn.onclick = () => {
+          AudioMediaEngine.click();
+          AppState.hostMaxPlayers = Number(btn.dataset.count);
+          document.querySelectorAll('.host-count-btn').forEach(b => {
+            const on = b === btn;
+            b.className = `host-count-btn py-1.5 rounded-lg text-xs sm:text-sm font-bold ${on ? 'bg-amber-400 text-stone-900 border border-amber-300' : 'bg-black/40 border border-emerald-400/30 text-emerald-100'}`;
+          });
+        };
+      });
+
+      // AI 難度切換（單機與連線補位共用同步）
+      document.querySelectorAll('.diff-btn, .host-diff-btn').forEach(btn => {
+        btn.onclick = () => { AudioMediaEngine.click(); syncDiffButtons(btn.dataset.diff); };
+      });
+
+      // 開始單機對戰
+      document.getElementById('btn-start-single').onclick = () => {
+        AudioMediaEngine.click();
+        launchSinglePlayerGame();
+      };
+
+      // 建立連線房間
+      document.getElementById('btn-create-room').onclick = () => { AudioMediaEngine.click(); createHostRoom(); };
+      document.getElementById('btn-copy-link').onclick = () => { AudioMediaEngine.click(); copyTextToClipboard(getInviteUrl(AppState.roomCode)); };
+      document.getElementById('host-room-code-display').onclick = () => copyTextToClipboard(getInviteUrl(AppState.roomCode));
+      document.getElementById('btn-close-room').onclick = () => { AudioMediaEngine.click(); resetToLobby(); switchLobbyTab('host'); };
+
+      // 補滿 AI
+      document.getElementById('btn-fill-ai').onclick = () => {
+        AudioMediaEngine.click();
+        const used = new Set(AppState.lobbyPlayers.map(p => p.name));
+        let idx = 0;
+        while (AppState.lobbyPlayers.length < AppState.hostMaxPlayers) {
+          let name = AI_NAMES[idx % AI_NAMES.length];
+          if (used.has(name)) name = `AI 玩家${AppState.lobbyPlayers.length}`;
+          used.add(name);
+          AppState.lobbyPlayers.push({ id: 'ai-' + Math.random().toString(36).slice(2, 7), name, isAI: true, connected: true });
+          idx++;
+        }
+        broadcastLobbyState();
+      };
+
+      // 房主開始遊戲
+      document.getElementById('btn-host-start-game').onclick = () => { AudioMediaEngine.click(); startHostGame(false); };
+
+      // 加入房間
+      document.getElementById('btn-join-room').onclick = () => { AudioMediaEngine.click(); joinRoomAsClient(document.getElementById('input-room-code').value); };
+      document.getElementById('btn-leave-room').onclick = () => { AudioMediaEngine.click(); resetToLobby(); switchLobbyTab('join'); };
+
+      // AudioMediaEngine 設定視窗
+      const openAudio = () => { AudioMediaEngine.click(); document.getElementById('modal-audio').classList.remove('hidden'); };
+      const closeAudio = () => { AudioMediaEngine.click(); document.getElementById('modal-audio').classList.add('hidden'); };
+      document.getElementById('btn-lobby-audio').onclick = openAudio;
+      document.getElementById('btn-game-audio').onclick = openAudio;
+      document.getElementById('btn-close-audio').onclick = closeAudio;
+      document.getElementById('btn-audio-done').onclick = closeAudio;
+
+      document.getElementById('btn-audio-master-mute').onclick = () => AudioMediaEngine.toggleMute();
+      document.getElementById('btn-bgm-toggle').onclick = () => AudioMediaEngine.toggleBGM();
+      document.getElementById('btn-reset-pentatonic').onclick = () => { AudioMediaEngine.click(); AudioMediaEngine.usePentatonic(); };
+      document.getElementById('input-custom-bgm').onchange = e => {
+        const file = e.target.files && e.target.files[0];
+        if (file) AudioMediaEngine.loadCustomFile(file);
+      };
+
+      document.getElementById('slider-bgm-vol').oninput = e => {
+        document.getElementById('val-bgm-vol').textContent = `${e.target.value}%`;
+        AudioMediaEngine.setBgmVol(Number(e.target.value) / 100);
+      };
+      document.getElementById('slider-sfx-vol').oninput = e => {
+        document.getElementById('val-sfx-vol').textContent = `${e.target.value}%`;
+        AudioMediaEngine.setSfxVol(Number(e.target.value) / 100);
+      };
+      document.getElementById('slider-speech-vol').oninput = e => {
+        document.getElementById('val-speech-vol').textContent = `${e.target.value}%`;
+        AudioMediaEngine.setSpeechVol(Number(e.target.value) / 100);
+      };
+      document.getElementById('chk-speech-enable').onchange = e => {
+        AudioMediaEngine.setSpeechEnabled(e.target.checked);
+      };
+
+      // 規則彈窗
+      const openRules = () => { AudioMediaEngine.click(); document.getElementById('modal-rules').classList.remove('hidden'); };
+      const closeRules = () => { AudioMediaEngine.click(); document.getElementById('modal-rules').classList.add('hidden'); };
+      document.getElementById('btn-lobby-rules').onclick = openRules;
+      document.getElementById('btn-game-rules').onclick = openRules;
+      document.getElementById('btn-close-rules').onclick = closeRules;
+      document.getElementById('btn-rules-ok').onclick = closeRules;
+
+      // 遊戲中 QR Code 彈窗
+      document.getElementById('btn-ingame-qr').onclick = () => {
+        AudioMediaEngine.click();
+        document.getElementById('modal-qr-code-text').textContent = `房號：${AppState.roomCode}`;
+        renderQRCode('modal-qrcode-box', AppState.roomCode);
+        document.getElementById('modal-qr').classList.remove('hidden');
+      };
+      document.getElementById('btn-close-qr').onclick = () => { AudioMediaEngine.click(); document.getElementById('modal-qr').classList.add('hidden'); };
+      document.getElementById('btn-modal-copy-link').onclick = () => { AudioMediaEngine.click(); copyTextToClipboard(getInviteUrl(AppState.roomCode)); };
+
+      // 離開遊戲
+      document.getElementById('btn-game-exit').onclick = () => {
+        AudioMediaEngine.click();
+        showDialog({
+          title: '確定要離開目前牌局嗎？',
+          message: AppState.mode === 'host' && !AppState.sandboxDegraded
+            ? '你是房主，離開將會關閉房間並中斷其他玩家連線。'
+            : '離開後將返回首頁大廳。',
+          showCancel: true,
+          confirmText: '確定離開',
+          onConfirm: () => resetToLobby()
+        });
+      };
+
+      // 結算彈窗按鈕
+      document.getElementById('btn-results-lobby').onclick = () => { AudioMediaEngine.click(); resetToLobby(); };
+      document.getElementById('btn-play-again').onclick = () => { AudioMediaEngine.click(); startHostGame(true); };
+    }
+
+    // -------------------- 初始化與自動路由偵測 (?room=XXXX) --------------------
+    window.onload = function () {
+      bindEvents();
+      AudioMediaEngine.syncAudioUI();
+
+      document.getElementById('input-nickname').value =
+        RANDOM_NICKNAMES[Math.floor(Math.random() * RANDOM_NICKNAMES.length)];
+
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const roomParam = params.get('room');
+        if (roomParam && roomParam.trim()) {
+          const cleanCode = roomParam.trim().toUpperCase();
+          switchLobbyTab('join');
+          document.getElementById('input-room-code').value = cleanCode;
+          showToast(`📱 已自動帶入房號 ${cleanCode}，點擊即可加入！`, 'gold');
+        }
+      } catch (e) {}
+    };
+  </script>
+</body>
+</html>
